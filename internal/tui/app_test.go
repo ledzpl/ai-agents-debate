@@ -353,6 +353,35 @@ func TestDebateStreamClosedWhileRunningEndsSession(t *testing.T) {
 	}
 }
 
+func TestBuildPersonaPanelShowsTurnCountsAndLastSpeaker(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = []persona.Persona{
+		{ID: "p1", Name: "Alpha", Role: "growth", Stance: "aggressive"},
+		{ID: "p2", Name: "Beta", Role: "ops", Stance: "stable"},
+	}
+	m.speakerTurns["p1"] = 3
+	m.speakerTurns["p2"] = 1
+	m.lastSpeakerName = "Alpha"
+
+	panel := m.buildPersonaPanel(50)
+	if !strings.Contains(panel, "[3T]") || !strings.Contains(panel, "[1T]") {
+		t.Fatalf("expected turn counters in panel, got %q", panel)
+	}
+	if !strings.Contains(panel, ">  1)") {
+		t.Fatalf("expected last-speaker marker, got %q", panel)
+	}
+	if !strings.Contains(panel, "last speaker: Alpha") {
+		t.Fatalf("expected last speaker summary, got %q", panel)
+	}
+}
+
 func TestFormatTurnLinesReadableSpacing(t *testing.T) {
 	personaTurn := orchestrator.Turn{
 		Index:       3,

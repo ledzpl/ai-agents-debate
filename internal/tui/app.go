@@ -187,7 +187,7 @@ func newModel(ctx context.Context, cfg modelConfig) model {
 		speakerTurns:  make(map[string]int),
 		historyCursor: 0,
 	}
-	m.refreshLogViewport()
+	m.resizeLayout()
 	return m
 }
 
