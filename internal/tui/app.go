@@ -157,7 +157,7 @@ type debateCompletedMsg struct {
 func newModel(ctx context.Context, cfg modelConfig) model {
 	ti := textinput.New()
 	ti.Prompt = ""
-	ti.Placeholder = "명령 입력 (/ask 질문, /show, /load, /exit | 일반 문장 입력 가능)"
+	ti.Placeholder = "Ask anything. /ask <topic> or just type a sentence"
 	ti.Focus()
 	ti.CharLimit = 1024 * 32
 	ti.Width = defaultWidth - 4
@@ -166,8 +166,8 @@ func newModel(ctx context.Context, cfg modelConfig) model {
 	vp.SetContent("")
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Line
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	sp.Spinner = spinner.MiniDot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
 
 	m := model{
 		ctx:           ctx,
@@ -180,7 +180,7 @@ func newModel(ctx context.Context, cfg modelConfig) model {
 		input:         ti,
 		logViewport:   vp,
 		spin:          sp,
-		logs:          []string{"Debate TUI initialized."},
+		logs:          []string{"Debate Studio ready."},
 		width:         defaultWidth,
 		height:        defaultHeight,
 		autoFollow:    true,

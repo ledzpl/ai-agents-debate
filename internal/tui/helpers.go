@@ -4,47 +4,33 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"debate/internal/commandutil"
 	"debate/internal/orchestrator"
 )
 
-func parseCommand(line string) (command string, arg string) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", ""
-	}
-
-	splitAt := strings.IndexFunc(line, unicode.IsSpace)
-	if splitAt == -1 {
-		return normalizeCommand(line), ""
-	}
-	cmd := normalizeCommand(line[:splitAt])
-	return cmd, strings.TrimSpace(line[splitAt+1:])
+var tuiCommandAliases = map[string]string{
+	"ask":     "/ask",
+	"/ask":    "/ask",
+	"stop":    "/stop",
+	"/stop":   "/stop",
+	"follow":  "/follow",
+	"/follow": "/follow",
+	"show":    "/show",
+	"/show":   "/show",
+	"load":    "/load",
+	"/load":   "/load",
+	"help":    "/help",
+	"/help":   "/help",
+	"exit":    "/exit",
+	"/exit":   "/exit",
 }
 
-func normalizeCommand(cmd string) string {
-	switch cmd {
-	case "ask", "/ask":
-		return "/ask"
-	case "stop", "/stop":
-		return "/stop"
-	case "follow", "/follow":
-		return "/follow"
-	case "show", "/show":
-		return "/show"
-	case "load", "/load":
-		return "/load"
-	case "help", "/help":
-		return "/help"
-	case "exit", "/exit":
-		return "/exit"
-	default:
-		return cmd
-	}
+func parseCommand(line string) (command string, arg string) {
+	return commandutil.Parse(line, tuiCommandAliases)
 }
 
 func onOff(v bool) string {
@@ -148,9 +134,9 @@ func formatTurnLines(turn orchestrator.Turn) []string {
 }
 
 func renderTurnSeparator(turn orchestrator.Turn) string {
-	line := strings.Repeat("-", 52)
+	line := strings.Repeat("-", 58)
 	if turn.Type == orchestrator.TurnTypeModerator {
-		line = strings.Repeat("=", 52)
+		line = strings.Repeat("=", 58)
 	}
 	return line
 }
@@ -161,11 +147,12 @@ func renderTurnHeader(turn orchestrator.Turn) string {
 		badge = "[M]"
 	}
 
-	badgeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1)
+	badgeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("31")).Padding(0, 1)
 	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(speakerColor(turn))
+	metaStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
 	if turn.Type == orchestrator.TurnTypeModerator {
 		badgeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166")).Padding(0, 1)
-		nameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		nameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
 	}
 
 	label := turn.SpeakerName
@@ -177,7 +164,7 @@ func renderTurnHeader(turn orchestrator.Turn) string {
 		lipgloss.Left,
 		badgeStyle.Render(badge),
 		" ",
-		fmt.Sprintf("turn %d", turn.Index),
+		metaStyle.Render(fmt.Sprintf("turn %d", turn.Index)),
 		" | ",
 		nameStyle.Render(label),
 	)
@@ -185,13 +172,13 @@ func renderTurnHeader(turn orchestrator.Turn) string {
 		return header
 	}
 
-	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
 	stamp := turn.Timestamp.Local().Format(time.TimeOnly)
 	return lipgloss.JoinHorizontal(lipgloss.Left, header, " | ", timeStyle.Render(stamp))
 }
 
 func speakerColor(turn orchestrator.Turn) lipgloss.Color {
-	palette := []string{"39", "69", "75", "81", "111", "141", "147", "177", "207"}
+	palette := []string{"45", "51", "80", "86", "111", "117", "123", "159", "194"}
 	key := turn.SpeakerID
 	if key == "" {
 		key = turn.SpeakerName

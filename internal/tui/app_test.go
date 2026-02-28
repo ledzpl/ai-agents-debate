@@ -375,7 +375,7 @@ func TestBuildPersonaPanelShowsTurnCountsAndLastSpeaker(t *testing.T) {
 	m.speakerTurns["p2"] = 1
 	m.lastSpeakerName = "Alpha"
 
-	panel := m.buildPersonaPanel(50)
+	panel := m.buildPersonaPanel(50, 24)
 	if !strings.Contains(panel, "[3T]") || !strings.Contains(panel, "[1T]") {
 		t.Fatalf("expected turn counters in panel, got %q", panel)
 	}
@@ -384,6 +384,76 @@ func TestBuildPersonaPanelShowsTurnCountsAndLastSpeaker(t *testing.T) {
 	}
 	if !strings.Contains(panel, "last speaker: Alpha") {
 		t.Fatalf("expected last speaker summary, got %q", panel)
+	}
+}
+
+func TestBuildPersonaPanelCompactsWhenTooManyPersonas(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = []persona.Persona{
+		{ID: "p1", Name: "Alpha", Role: "r1"},
+		{ID: "p2", Name: "Beta", Role: "r2"},
+		{ID: "p3", Name: "Gamma", Role: "r3"},
+		{ID: "p4", Name: "Delta", Role: "r4"},
+		{ID: "p5", Name: "Epsilon", Role: "r5"},
+		{ID: "p6", Name: "Zeta", Role: "r6"},
+	}
+
+	panel := m.buildPersonaPanel(32, 4)
+	if !strings.Contains(panel, "+") || !strings.Contains(panel, "more personas") {
+		t.Fatalf("expected overflow summary for compact panel, got %q", panel)
+	}
+	if len(strings.Split(panel, "\n")) > 4 {
+		t.Fatalf("expected panel lines to respect maxLines, got %q", panel)
+	}
+}
+
+func TestBuildPersonaPanelRespectsSingleLineLimit(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = []persona.Persona{
+		{ID: "p1", Name: "Alpha", Role: "r1"},
+		{ID: "p2", Name: "Beta", Role: "r2"},
+		{ID: "p3", Name: "Gamma", Role: "r3"},
+	}
+
+	panel := m.buildPersonaPanel(28, 1)
+	if len(strings.Split(panel, "\n")) > 1 {
+		t.Fatalf("expected single-line panel, got %q", panel)
+	}
+	if !strings.Contains(panel, "more personas") {
+		t.Fatalf("expected overflow summary in single-line panel, got %q", panel)
+	}
+}
+
+func TestBuildPersonaPanelEmptyStateRespectsSingleLineLimit(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+
+	panel := m.buildPersonaPanel(20, 1)
+	if len(strings.Split(panel, "\n")) > 1 {
+		t.Fatalf("expected single-line empty panel, got %q", panel)
+	}
+	if !strings.Contains(panel, "no personas loaded") {
+		t.Fatalf("expected empty-state message, got %q", panel)
 	}
 }
 

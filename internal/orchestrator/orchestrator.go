@@ -436,6 +436,15 @@ func (o *Orchestrator) appendFinalModeratorTurn(ctx context.Context, res *Result
 }
 
 func nextTurnIndex(turns []Turn) int {
+	if len(turns) == 0 {
+		return 1
+	}
+	last := turns[len(turns)-1].Index
+	if last > 0 {
+		return last + 1
+	}
+
+	// Fallback for malformed historical data with non-positive tail indices.
 	maxIdx := 0
 	for _, t := range turns {
 		if t.Index > maxIdx {

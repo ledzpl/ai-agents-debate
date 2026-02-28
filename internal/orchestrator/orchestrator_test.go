@@ -282,3 +282,17 @@ func TestConsensusFallbackSummaryUsesPreFinalTurn(t *testing.T) {
 		t.Fatalf("expected summary to reference pre-final persona turn: %q", result.Consensus.Summary)
 	}
 }
+
+func TestNextTurnIndex(t *testing.T) {
+	if got := nextTurnIndex(nil); got != 1 {
+		t.Fatalf("expected 1 for empty turns, got %d", got)
+	}
+
+	if got := nextTurnIndex([]Turn{{Index: 1}, {Index: 2}}); got != 3 {
+		t.Fatalf("expected fast-path next index 3, got %d", got)
+	}
+
+	if got := nextTurnIndex([]Turn{{Index: 3}, {Index: 0}, {Index: -1}}); got != 4 {
+		t.Fatalf("expected fallback max+1 index 4, got %d", got)
+	}
+}

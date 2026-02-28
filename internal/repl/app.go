@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 	"time"
-	"unicode"
 
+	"debate/internal/commandutil"
 	"debate/internal/orchestrator"
 	"debate/internal/output"
 	"debate/internal/persona"
@@ -43,6 +43,19 @@ type App struct {
 }
 
 const maxREPLInputBytes = 1024 * 1024
+
+var replCommandAliases = map[string]string{
+	"ask":   "/ask",
+	"/ask":  "/ask",
+	"show":  "/show",
+	"/show": "/show",
+	"load":  "/load",
+	"/load": "/load",
+	"help":  "/help",
+	"/help": "/help",
+	"exit":  "/exit",
+	"/exit": "/exit",
+}
 
 func NewApp(cfg Config) *App {
 	if cfg.Loader == nil {
@@ -215,17 +228,7 @@ func (a *App) printLine(msg string) {
 }
 
 func parseCommand(line string) (command string, arg string) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", ""
-	}
-
-	splitAt := strings.IndexFunc(line, unicode.IsSpace)
-	if splitAt == -1 {
-		return normalizeCommand(line), ""
-	}
-	cmd := normalizeCommand(line[:splitAt])
-	return cmd, strings.TrimSpace(line[splitAt+1:])
+	return commandutil.Parse(line, replCommandAliases)
 }
 
 func formatTurnLines(turn orchestrator.Turn) []string {
@@ -258,23 +261,6 @@ func formatTurnLines(turn orchestrator.Turn) []string {
 	lines = append(lines, separator, "")
 
 	return lines
-}
-
-func normalizeCommand(cmd string) string {
-	switch cmd {
-	case "ask", "/ask":
-		return "/ask"
-	case "show", "/show":
-		return "/show"
-	case "load", "/load":
-		return "/load"
-	case "help", "/help":
-		return "/help"
-	case "exit", "/exit":
-		return "/exit"
-	default:
-		return cmd
-	}
 }
 
 func (a *App) printHelp() {
