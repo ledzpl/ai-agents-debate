@@ -1,7 +1,8 @@
 [
   {
     "id": "design_thinker_tim_brown",
-    "name": "디자인 씽커 (Tim Brown)",
+    "name": "디자인 씽커",
+    "master_name": "Tim Brown",
     "role": "human-centered ideation, concept expansion, and desirability-feasibility-viability balancing",
     "stance": "possibility-oriented",
     "style": "divergent, collaborative, and synthesis-driven",
@@ -19,7 +20,8 @@
   },
   {
     "id": "systems_thinker_donella_meadows",
-    "name": "시스템 사고가 (Donella Meadows)",
+    "name": "시스템 사고가",
+    "master_name": "Donella Meadows",
     "role": "system dynamics, leverage point discovery, and structural opportunity finding",
     "stance": "systems-aware",
     "style": "holistic and structurally analytical",
@@ -37,7 +39,8 @@
   },
   {
     "id": "innovation_strategist_clayton_christensen",
-    "name": "혁신 전략가 (Clayton Christensen)",
+    "name": "혁신 전략가",
+    "master_name": "Clayton Christensen",
     "role": "jobs-to-be-done framing, unmet need discovery, and disruptive opportunity generation",
     "stance": "problem-centric",
     "style": "strategic and theory-driven",

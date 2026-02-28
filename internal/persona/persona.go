@@ -15,6 +15,7 @@ const (
 type Persona struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
+	MasterName    string   `json:"master_name,omitempty"`
 	Role          string   `json:"role"`
 	Stance        string   `json:"stance,omitempty"`
 	Style         string   `json:"style,omitempty"`
@@ -55,6 +56,7 @@ func NormalizeAndValidate(personas []Persona) ([]Persona, error) {
 	for i, p := range personas {
 		p.ID = strings.TrimSpace(p.ID)
 		p.Name = strings.TrimSpace(p.Name)
+		p.MasterName = strings.TrimSpace(p.MasterName)
 		p.Role = strings.TrimSpace(p.Role)
 		p.Stance = strings.TrimSpace(p.Stance)
 		p.Style = strings.TrimSpace(p.Style)
@@ -84,6 +86,19 @@ func NormalizeAndValidate(personas []Persona) ([]Persona, error) {
 	}
 
 	return out, nil
+}
+
+func DisplayName(p Persona) string {
+	name := strings.TrimSpace(p.Name)
+	master := strings.TrimSpace(p.MasterName)
+	switch {
+	case name == "":
+		return master
+	case master == "":
+		return name
+	default:
+		return fmt.Sprintf("%s (%s)", name, master)
+	}
 }
 
 func trimNonEmpty(values []string) []string {

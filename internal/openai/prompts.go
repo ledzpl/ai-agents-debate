@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"debate/internal/orchestrator"
+	"debate/internal/persona"
 )
 
 func buildTurnSystemPrompt() string {
@@ -15,7 +16,9 @@ Rules:
 - Reference at least one previous point when possible.
 - Avoid repeating your own previous claims.
 - Keep a clearly distinctive voice aligned with the persona profile, especially signature_lens if provided.
-- If a real expert is referenced in the persona name, use it only as inspiration; do not claim to be the real person.
+- If a real expert is provided as master_name, use that person's known knowledge from books, papers, and articles as inspiration.
+- When master_name exists, include at least one concrete concept/framework from that body of work in your turn.
+- Do not claim to be the real person, and do not invent specific titles/dates when you are unsure.
 - Return plain text only, without speaker labels or markdown.`)
 }
 
@@ -27,6 +30,10 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 
 	b.WriteString("Current speaker profile:\n")
 	b.WriteString(fmt.Sprintf("- id: %s\n- name: %s\n- role: %s\n- stance: %s\n", input.Speaker.ID, input.Speaker.Name, input.Speaker.Role, input.Speaker.Stance))
+	if strings.TrimSpace(input.Speaker.MasterName) != "" {
+		b.WriteString("- master_name: " + strings.TrimSpace(input.Speaker.MasterName) + "\n")
+		b.WriteString("- master usage requirement: ground this turn in the master's known books, papers, articles, or established frameworks.\n")
+	}
 	if input.Speaker.Style != "" {
 		b.WriteString("- style: " + input.Speaker.Style + "\n")
 	}
@@ -51,7 +58,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 
 	b.WriteString("\nParticipants:\n")
 	for _, p := range input.Personas {
-		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", p.Name, p.ID, p.Role))
+		b.WriteString(participantPromptLine(p) + "\n")
 	}
 
 	b.WriteString("\nDebate log so far:\n")
@@ -85,6 +92,7 @@ Rules:
 - Summarize the most recent discussion point in 1-2 sentences.
 - Highlight one unresolved issue or tradeoff.
 - Direct the next speaker with one concrete prompt/question tailored to that speaker's signature style.
+- If the next speaker has master_name, explicitly ask them to apply that master's known books, papers, or articles.
 - Keep it concise and actionable.
 - Return plain text only, without markdown.`)
 }
@@ -95,7 +103,7 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 	b.WriteString(input.Problem)
 	b.WriteString("\n\nParticipants:\n")
 	for _, p := range input.Personas {
-		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", p.Name, p.ID, p.Role))
+		b.WriteString(participantPromptLine(p) + "\n")
 	}
 
 	b.WriteString("\nRecent debate log:\n")
@@ -106,7 +114,11 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 	b.WriteString("\nLatest persona statement:\n")
 	b.WriteString(fmt.Sprintf("[%d][%s] %s\n", input.PreviousTurn.Index, input.PreviousTurn.SpeakerName, input.PreviousTurn.Content))
 	b.WriteString("\nNext speaker:\n")
-	b.WriteString(fmt.Sprintf("- %s (%s): %s\n", input.NextSpeaker.Name, input.NextSpeaker.ID, input.NextSpeaker.Role))
+	b.WriteString(participantPromptLine(input.NextSpeaker) + "\n")
+	if strings.TrimSpace(input.NextSpeaker.MasterName) != "" {
+		b.WriteString("- next speaker master_name: " + strings.TrimSpace(input.NextSpeaker.MasterName) + "\n")
+		b.WriteString("- moderator instruction: ask the next speaker to use ideas from this master's books, papers, or articles.\n")
+	}
 	nextSpeakerLens := input.NextSpeaker.SignatureLens
 	if len(nextSpeakerLens) > 0 {
 		b.WriteString("- next speaker signature lens:\n")
@@ -134,7 +146,7 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 	b.WriteString(input.Problem)
 	b.WriteString("\n\nParticipants:\n")
 	for _, p := range input.Personas {
-		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", p.Name, p.ID, p.Role))
+		b.WriteString(participantPromptLine(p) + "\n")
 	}
 
 	b.WriteString("\nFinal status:\n")
@@ -162,13 +174,21 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	b.WriteString(input.Problem)
 	b.WriteString("\n\nParticipants:\n")
 	for _, p := range input.Personas {
-		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", p.Name, p.ID, p.Role))
+		b.WriteString(participantPromptLine(p) + "\n")
 	}
 	b.WriteString("\nDebate log:\n")
 	for _, t := range trimTurns(input.Turns, 24) {
 		b.WriteString(fmt.Sprintf("[%d][%s] %s\n", t.Index, t.SpeakerName, t.Content))
 	}
 	return b.String()
+}
+
+func participantPromptLine(p persona.Persona) string {
+	line := fmt.Sprintf("- %s (%s): %s", persona.DisplayName(p), p.ID, p.Role)
+	if strings.TrimSpace(p.MasterName) != "" {
+		line += " | master_name=" + strings.TrimSpace(p.MasterName)
+	}
+	return line
 }
 
 func trimTurns(turns []orchestrator.Turn, limit int) []orchestrator.Turn {

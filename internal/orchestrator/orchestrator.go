@@ -280,7 +280,7 @@ func (o *Orchestrator) generatePersonaTurn(ctx context.Context, res *Result, per
 	return Turn{
 		Index:       nextTurnIndex(res.Turns),
 		SpeakerID:   speaker.ID,
-		SpeakerName: speaker.Name,
+		SpeakerName: persona.DisplayName(speaker),
 		Type:        TurnTypePersona,
 		Content:     content,
 		Timestamp:   time.Now().UTC(),

@@ -173,7 +173,7 @@ func (a *App) showPersonas() {
 
 	a.printLine(fmt.Sprintf("personas (%d):", len(a.personas)))
 	for i, p := range a.personas {
-		a.printLine(fmt.Sprintf("%d. %s (%s) role=%s stance=%s", i+1, p.Name, p.ID, p.Role, p.Stance))
+		a.printLine(fmt.Sprintf("%d. %s (%s) role=%s stance=%s", i+1, persona.DisplayName(p), p.ID, p.Role, p.Stance))
 	}
 	if a.lastResultPath != "" {
 		a.printLine("last result: " + a.lastResultPath)

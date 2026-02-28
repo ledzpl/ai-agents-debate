@@ -1,7 +1,8 @@
 [
   {
     "id": "growth_pm_brian_balfour",
-    "name": "그로스 PM (Brian Balfour)",
+    "name": "그로스 PM",
+    "master_name": "Brian Balfour",
     "role": "growth loops, acquisition-retention optimization, and product-led growth strategy",
     "stance": "experiment-driven",
     "style": "framework-based and outcome-focused",
@@ -18,7 +19,8 @@
   },
   {
     "id": "ux_researcher_service_designer_nir_eyal",
-    "name": "UX 리서처 / 서비스 디자이너 (Nir Eyal)",
+    "name": "UX 리서처 / 서비스 디자이너",
+    "master_name": "Nir Eyal",
     "role": "user behavior, habit-forming experience design, and qualitative research insight",
     "stance": "user-centric",
     "style": "behavioral and insight-oriented",
@@ -35,7 +37,8 @@
   },
   {
     "id": "data_analyst_julie_zhuo",
-    "name": "데이터 분석가 (Julie Zhuo)",
+    "name": "데이터 분석가",
+    "master_name": "Julie Zhuo",
     "role": "metric design, decision support via data, and product quality signal interpretation",
     "stance": "evidence-first",
     "style": "clear and metric-oriented",
@@ -52,7 +55,8 @@
   },
   {
     "id": "cx_operations_lead_ron_kohavi",
-    "name": "고객 경험/운영 리드 (Ron Kohavi)",
+    "name": "고객 경험/운영 리드",
+    "master_name": "Ron Kohavi",
     "role": "customer experience operations, experimentation culture, and scalable decision processes",
     "stance": "pragmatic",
     "style": "operational and test-centric",

@@ -4,7 +4,7 @@ import "testing"
 
 func TestNormalizeAndValidate(t *testing.T) {
 	personas := []Persona{
-		{ID: " architect ", Name: " Architect ", Role: " Design ", Stance: " ", Expertise: []string{" systems ", ""}, SignatureLens: []string{" growth loops ", ""}},
+		{ID: " architect ", Name: " Architect ", MasterName: "  Brian Balfour ", Role: " Design ", Stance: " ", Expertise: []string{" systems ", ""}, SignatureLens: []string{" growth loops ", ""}},
 		{ID: "operator", Name: "Operator", Role: "Reliability"},
 	}
 
@@ -15,6 +15,9 @@ func TestNormalizeAndValidate(t *testing.T) {
 	if got := normalized[0].ID; got != "architect" {
 		t.Fatalf("unexpected id: %s", got)
 	}
+	if got := normalized[0].MasterName; got != "Brian Balfour" {
+		t.Fatalf("unexpected master name: %s", got)
+	}
 	if got := normalized[0].Stance; got != "neutral" {
 		t.Fatalf("unexpected stance: %s", got)
 	}
@@ -23,6 +26,18 @@ func TestNormalizeAndValidate(t *testing.T) {
 	}
 	if len(normalized[0].SignatureLens) != 1 || normalized[0].SignatureLens[0] != "growth loops" {
 		t.Fatalf("unexpected signature lens: %#v", normalized[0].SignatureLens)
+	}
+}
+
+func TestDisplayName(t *testing.T) {
+	withMaster := DisplayName(Persona{Name: "그로스 PM", MasterName: "Brian Balfour"})
+	if withMaster != "그로스 PM (Brian Balfour)" {
+		t.Fatalf("unexpected display name: %s", withMaster)
+	}
+
+	withoutMaster := DisplayName(Persona{Name: "그로스 PM"})
+	if withoutMaster != "그로스 PM" {
+		t.Fatalf("unexpected display name without master: %s", withoutMaster)
 	}
 }
 

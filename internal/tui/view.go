@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"debate/internal/persona"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -169,12 +170,13 @@ func (m *model) buildPersonaPanel(width int) string {
 	metaWidth := maxInt(10, width-6)
 	lensWidth := maxInt(10, width-8)
 	for i, p := range m.personas {
+		displayName := persona.DisplayName(p)
 		marker := " "
-		if strings.TrimSpace(m.lastSpeakerName) != "" && p.Name == m.lastSpeakerName {
+		if strings.TrimSpace(m.lastSpeakerName) != "" && displayName == m.lastSpeakerName {
 			marker = ">"
 		}
 		turns := m.speakerTurns[p.ID]
-		line1 := fmt.Sprintf("%s %2d) %s [%dT]", marker, i+1, truncateText(p.Name, nameWidth), turns)
+		line1 := fmt.Sprintf("%s %2d) %s [%dT]", marker, i+1, truncateText(displayName, nameWidth), turns)
 		line2 := fmt.Sprintf("    %s", truncateText("role: "+p.Role+" | stance: "+p.Stance, metaWidth))
 		lines = append(lines, line1, line2)
 		if len(p.SignatureLens) > 0 {

@@ -104,6 +104,7 @@ REPL에서는 아래 명령만 지원합니다.
   {
     "id": "architect",
     "name": "System Architect",
+    "master_name": "Martin Fowler",
     "role": "long-term scalability",
     "stance": "cautious",
     "style": "structured",
@@ -118,5 +119,8 @@ Validation rules:
 
 - 2 to 12 personas
 - `id`, `name`, `role` 필수
+- `master_name` optional (롤모델/참고 인물 이름)
 - `id`는 unique
 - `signature_lens`는 optional (권장)
+
+`master_name`를 설정하면 해당 인물의 공개적으로 알려진 지식/저술/논문/아티클 기반 관점을 우선 반영하도록 프롬프트가 강화됩니다(실존 인물 사칭 금지).

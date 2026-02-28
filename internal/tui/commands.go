@@ -163,7 +163,7 @@ func (m *model) appendPersonaList() {
 	lines := make([]string, 0, len(m.personas)+1)
 	lines = append(lines, fmt.Sprintf("personas (%d):", len(m.personas)))
 	for i, p := range m.personas {
-		lines = append(lines, fmt.Sprintf("%d. %s (%s) role=%s stance=%s", i+1, p.Name, p.ID, p.Role, p.Stance))
+		lines = append(lines, fmt.Sprintf("%d. %s (%s) role=%s stance=%s", i+1, persona.DisplayName(p), p.ID, p.Role, p.Stance))
 	}
 	m.appendLogs(lines...)
 }
