@@ -26,11 +26,12 @@ const (
 )
 
 const (
-	defaultConsensusThreshold = 0.85
-	defaultMaxDuration        = 20 * time.Minute
-	defaultMaxTotalTokens     = 120000
-	defaultMaxNoProgress      = 6
-	defaultNoProgressEpsilon  = 0.01
+	defaultConsensusThreshold     = 0.90
+	defaultConsensusConfirmations = 2
+	defaultMaxDuration            = 20 * time.Minute
+	defaultMaxTotalTokens         = 120000
+	defaultMaxNoProgress          = 6
+	defaultNoProgressEpsilon      = 0.01
 )
 
 type Usage struct {
@@ -148,6 +149,8 @@ type judgeProgress struct {
 	noProgressJudges int
 	hasPrevScore     bool
 	prevScore        float64
+	// Consecutive confirmations reduce false positives from a single optimistic judge call.
+	consecutiveConsensusJudges int
 }
 
 func New(llm LLMClient, cfg Config) *Orchestrator {
@@ -309,7 +312,12 @@ func (o *Orchestrator) evaluateConsensus(ctx context.Context, res *Result, perso
 	if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
 		return StatusTokenLimitReached, true, nil
 	}
-	if res.Consensus.Reached && res.Consensus.Score >= o.cfg.ConsensusThreshold {
+	if consensusSatisfied(res.Consensus, o.cfg.ConsensusThreshold) {
+		progress.consecutiveConsensusJudges++
+	} else {
+		progress.consecutiveConsensusJudges = 0
+	}
+	if progress.consecutiveConsensusJudges >= requiredConsensusConfirmations(len(personas)) {
 		return StatusConsensusReached, true, nil
 	}
 
@@ -318,6 +326,17 @@ func (o *Orchestrator) evaluateConsensus(ctx context.Context, res *Result, perso
 		return StatusNoProgressReached, true, nil
 	}
 	return "", false, nil
+}
+
+func consensusSatisfied(consensus Consensus, threshold float64) bool {
+	return consensus.Reached && consensus.Score >= threshold
+}
+
+func requiredConsensusConfirmations(personaCount int) int {
+	if personaCount <= 1 {
+		return 1
+	}
+	return defaultConsensusConfirmations
 }
 
 func (o *Orchestrator) generateModeratorTurn(ctx context.Context, res *Result, personas []persona.Persona, previousTurn Turn, nextSpeaker persona.Persona, turnNo int) (Turn, error) {

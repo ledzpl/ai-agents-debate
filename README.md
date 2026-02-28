@@ -22,6 +22,14 @@ export OPENAI_API_KEY="<your-key>"
 go run ./cmd/debate
 ```
 
+persona 파일을 실행 시 지정하려면:
+
+```bash
+go run ./cmd/debate --personas ./exmaples/personas.pm.json
+```
+
+`--persona`는 `--personas`의 alias입니다.
+
 기본 로딩 경로:
 
 - persona 파일: `./personas.json`
@@ -42,7 +50,7 @@ go run ./cmd/debate
 | `OPENAI_BASE_URL` | 없음 | 커스텀 엔드포인트 베이스 URL |
 | `OPENAI_MODEL` | `gpt-5.2` | 사용할 모델 |
 | `DEBATE_MAX_TURNS` | `0` | persona 턴 최대치 (`0` = 무제한) |
-| `DEBATE_CONSENSUS_THRESHOLD` | `0.85` | 합의 점수 임계값 (`0..1`) |
+| `DEBATE_CONSENSUS_THRESHOLD` | `0.90` | 합의 점수 임계값 (`0..1`) |
 | `DEBATE_MAX_DURATION` | `20m` | 최대 실행 시간 (duration 형식) |
 | `DEBATE_MAX_TOTAL_TOKENS` | `120000` | 최대 누적 토큰 (`> 0`) |
 | `DEBATE_MAX_NO_PROGRESS_JUDGE` | `6` | 합의 점수 정체 허용 횟수 (`> 0`) |
@@ -54,7 +62,8 @@ go run ./cmd/debate
 1. persona가 순환하면서 발언
 2. persona 발언 사이마다 사회자가 요약/질문으로 개입
 3. 주기적으로 합의 점수 판정
-4. 종료 시 마지막은 항상 사회자 최종 정리 턴
+4. `consensus_reached`는 단일 판정이 아니라 연속 합의 판정 확인 후 종료
+5. 종료 시 마지막은 항상 사회자 최종 정리 턴
 
 ### 종료 상태
 

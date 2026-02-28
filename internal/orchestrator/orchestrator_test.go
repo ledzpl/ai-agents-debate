@@ -97,11 +97,11 @@ func TestRunStopsOnConsensus(t *testing.T) {
 	if result.Status != StatusConsensusReached {
 		t.Fatalf("unexpected status: %s", result.Status)
 	}
-	if len(result.Turns) != 4 {
-		t.Fatalf("expected 4 turns, got %d", len(result.Turns))
+	if len(result.Turns) != 8 {
+		t.Fatalf("expected 8 turns with stricter consensus confirmation, got %d", len(result.Turns))
 	}
-	if llm.moderatorCalls != 1 {
-		t.Fatalf("expected 1 moderator call, got %d", llm.moderatorCalls)
+	if llm.moderatorCalls != 3 {
+		t.Fatalf("expected 3 moderator calls, got %d", llm.moderatorCalls)
 	}
 	if llm.finalCalls != 1 {
 		t.Fatalf("expected 1 final moderator call, got %d", llm.finalCalls)
@@ -189,11 +189,11 @@ func TestRunUnlimitedStopsOnConsensus(t *testing.T) {
 	if result.Status != StatusConsensusReached {
 		t.Fatalf("unexpected status: %s", result.Status)
 	}
-	if llm.generateCalls != 4 {
-		t.Fatalf("expected 4 persona turns, got %d", llm.generateCalls)
+	if llm.generateCalls != 6 {
+		t.Fatalf("expected 6 persona turns, got %d", llm.generateCalls)
 	}
-	if llm.moderatorCalls != 3 {
-		t.Fatalf("expected 3 moderator turns, got %d", llm.moderatorCalls)
+	if llm.moderatorCalls != 5 {
+		t.Fatalf("expected 5 moderator turns, got %d", llm.moderatorCalls)
 	}
 	if llm.finalCalls != 1 {
 		t.Fatalf("expected 1 final moderator turn, got %d", llm.finalCalls)
@@ -294,5 +294,17 @@ func TestNextTurnIndex(t *testing.T) {
 
 	if got := nextTurnIndex([]Turn{{Index: 3}, {Index: 0}, {Index: -1}}); got != 4 {
 		t.Fatalf("expected fallback max+1 index 4, got %d", got)
+	}
+}
+
+func TestRequiredConsensusConfirmations(t *testing.T) {
+	if got := requiredConsensusConfirmations(0); got != 1 {
+		t.Fatalf("expected single confirmation for non-positive persona count, got %d", got)
+	}
+	if got := requiredConsensusConfirmations(1); got != 1 {
+		t.Fatalf("expected single confirmation for one persona, got %d", got)
+	}
+	if got := requiredConsensusConfirmations(2); got != defaultConsensusConfirmations {
+		t.Fatalf("expected %d confirmations for multi-persona, got %d", defaultConsensusConfirmations, got)
 	}
 }

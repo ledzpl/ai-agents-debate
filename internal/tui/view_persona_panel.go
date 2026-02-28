@@ -23,6 +23,7 @@ func (m *model) buildPersonaPanel(width int, maxLines int) string {
 	metaWidth := maxInt(10, width-6)
 	lensWidth := maxInt(10, width-8)
 	rendered := 0
+	maxTurns := maxSpeakerTurns(m.speakerTurns)
 
 	for i, p := range m.personas {
 		displayName := persona.DisplayName(p)
@@ -33,7 +34,7 @@ func (m *model) buildPersonaPanel(width int, maxLines int) string {
 
 		turns := m.speakerTurns[p.ID]
 		block := []string{
-			fmt.Sprintf("%s %2d) %s [%dT]", marker, i+1, truncateText(displayName, nameWidth), turns),
+			fmt.Sprintf("%s %2d) %s [%dT] %s", marker, i+1, truncateText(displayName, nameWidth), turns, miniMeter(turns, maxTurns, 4)),
 			fmt.Sprintf("    %s", truncateText("role: "+p.Role+" | stance: "+p.Stance, metaWidth)),
 		}
 
@@ -90,6 +91,7 @@ func (m model) buildCompactPersonaPanel(width int, maxLines int) string {
 	nameWidth := maxInt(10, width-15)
 	overflow := len(m.personas) > maxLines
 	visible := maxLines
+	maxTurns := maxSpeakerTurns(m.speakerTurns)
 	if overflow {
 		visible = maxLines - 1
 	}
@@ -105,7 +107,7 @@ func (m model) buildCompactPersonaPanel(width int, maxLines int) string {
 			marker = ">"
 		}
 		turns := m.speakerTurns[p.ID]
-		lines = append(lines, fmt.Sprintf("%s %2d) %s [%dT]", marker, i+1, truncateText(displayName, nameWidth), turns))
+		lines = append(lines, fmt.Sprintf("%s %2d) %s [%dT] %s", marker, i+1, truncateText(displayName, nameWidth), turns, miniMeter(turns, maxTurns, 3)))
 	}
 	if overflow {
 		lines = appendOverflowLine(lines, fmt.Sprintf("... +%d more personas", len(m.personas)-visible), maxLines, width)
@@ -126,4 +128,17 @@ func appendOverflowLine(lines []string, line string, maxLines int, width int) []
 	}
 	lines[maxLines-1] = line
 	return lines
+}
+
+func maxSpeakerTurns(turns map[string]int) int {
+	maxTurns := 0
+	for _, t := range turns {
+		if t > maxTurns {
+			maxTurns = t
+		}
+	}
+	if maxTurns <= 0 {
+		return 1
+	}
+	return maxTurns
 }

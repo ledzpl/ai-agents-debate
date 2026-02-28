@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"debate/internal/config"
@@ -15,7 +17,17 @@ import (
 	"golang.org/x/term"
 )
 
+type runtimeOptions struct {
+	personaPath string
+}
+
 func main() {
+	opts, err := parseRuntimeOptions(os.Args[1:])
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "argument error:", err)
+		os.Exit(1)
+	}
+
 	settings, err := config.FromEnv()
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "config error:", err)
@@ -44,7 +56,7 @@ func main() {
 
 	if isTTY() {
 		app := tui.NewApp(tui.Config{
-			PersonaPath: config.DefaultPersonaPath,
+			PersonaPath: opts.personaPath,
 			OutputDir:   config.DefaultOutputDir,
 			MaxTurns:    settings.MaxTurns,
 			Runner:      runner,
@@ -60,7 +72,7 @@ func main() {
 
 	// Fallback for non-interactive shells (pipes, CI).
 	app := repl.NewApp(repl.Config{
-		PersonaPath: config.DefaultPersonaPath,
+		PersonaPath: opts.personaPath,
 		OutputDir:   config.DefaultOutputDir,
 		Runner:      runner,
 		Loader:      persona.LoadFromFile,
@@ -76,4 +88,24 @@ func main() {
 
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+func parseRuntimeOptions(args []string) (runtimeOptions, error) {
+	fs := flag.NewFlagSet("debate", flag.ContinueOnError)
+	personaPath := fs.String("personas", config.DefaultPersonaPath, "path to personas json file")
+	fs.StringVar(personaPath, "persona", config.DefaultPersonaPath, "alias of -personas")
+	fs.SetOutput(os.Stderr)
+
+	if err := fs.Parse(args); err != nil {
+		return runtimeOptions{}, err
+	}
+	if len(fs.Args()) > 0 {
+		return runtimeOptions{}, fmt.Errorf("unexpected positional args: %s", strings.Join(fs.Args(), " "))
+	}
+
+	path := strings.TrimSpace(*personaPath)
+	if path == "" {
+		path = config.DefaultPersonaPath
+	}
+	return runtimeOptions{personaPath: path}, nil
 }

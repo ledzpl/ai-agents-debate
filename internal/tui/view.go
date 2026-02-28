@@ -9,22 +9,47 @@ import (
 )
 
 var (
-	viewChromeStyle     = lipgloss.NewStyle().Padding(0, 1)
-	viewHeroStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("74")).Background(lipgloss.Color("236")).Padding(0, 1)
-	viewTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("30")).Padding(0, 1)
-	viewSubtitleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("151")).Italic(true)
-	viewMetaStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("223")).Bold(true)
-	viewChipStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("254")).Background(lipgloss.Color("238")).Padding(0, 1)
-	viewChipHotStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("31")).Padding(0, 1).Bold(true)
-	viewRunningBadge    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166")).Bold(true).Padding(0, 1)
-	viewIdleBadge       = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("60")).Bold(true).Padding(0, 1)
-	viewPanelStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("67")).Background(lipgloss.Color("235")).Padding(0, 1)
-	viewPanelTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
+	viewChromeStyle = lipgloss.NewStyle().Padding(0, 1)
+
+	viewHeroStyle       = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("67")).Background(lipgloss.Color("234")).Padding(0, 1)
+	viewBrandPillStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("31")).Padding(0, 1)
+	viewSubtitleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
+	viewStatusRunStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166")).Padding(0, 1)
+	viewStatusIdleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("231")).
+				Background(lipgloss.Color("60")).
+				Padding(0, 1)
+
+	viewChipStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("237")).Padding(0, 1)
+	viewChipHotStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("39")).Padding(0, 1)
+	viewMetricStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
+	viewResultTagStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("24")).
+				Padding(0, 1)
+	viewResultPathStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("151"))
+
+	viewPanelStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("60")).Background(lipgloss.Color("235")).Padding(0, 1)
+	viewPanelTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
 	viewPanelMetaStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
-	viewCmdRibbonStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Background(lipgloss.Color("236")).Padding(0, 1)
+	viewPanelRuleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+
+	viewCmdRibbonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
+	viewKeycapStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("31")).Padding(0, 1)
+	viewCmdTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
+
 	viewHintStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
-	viewInputLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("31")).Bold(true).Padding(0, 1)
-	viewInputBoxStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("74")).Background(lipgloss.Color("236")).Padding(0, 1)
+	viewHintLabelStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
+	viewInputBoxStyle   = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("67")).Background(lipgloss.Color("236")).Padding(0, 1)
+	viewInputLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("231")).
+				Background(lipgloss.Color("31")).
+				Padding(0, 1)
+	viewInputMetaStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
 )
 
 func (m model) View() string {
@@ -40,23 +65,29 @@ func (m model) View() string {
 	hero := m.renderHero(contentWidth)
 	commands := m.renderCommandRibbon(contentWidth)
 
-	personaHeader := viewPanelTitleStyle.Render(fmt.Sprintf("PERSONAS (%d)", len(m.personas)))
-	personaBody := m.buildPersonaPanel(maxInt(20, leftW-4), maxInt(4, panelH-3))
+	personaBody := m.buildPersonaPanel(maxInt(20, leftW-4), maxInt(4, panelH-4))
 	personaPanel := viewPanelStyle.
 		Width(leftW).
 		Height(panelH).
-		Render(lipgloss.JoinVertical(lipgloss.Left, personaHeader, personaBody))
+		Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.renderPanelHeader("PERSONAS", fmt.Sprintf("loaded=%d", len(m.personas)), maxInt(20, leftW-4)),
+			personaBody,
+		))
 
 	lastSpeaker := "-"
 	if strings.TrimSpace(m.lastSpeakerName) != "" {
 		lastSpeaker = m.lastSpeakerName
 	}
-	logMeta := viewPanelMetaStyle.Render(fmt.Sprintf("lines=%d follow=%s last=%s", len(m.logs), onOff(m.autoFollow), truncateText(lastSpeaker, 22)))
-	logHeader := viewPanelTitleStyle.Render("DEBATE LOG")
+	logMeta := fmt.Sprintf("lines=%d  follow=%s  last=%s", len(m.logs), onOff(m.autoFollow), truncateText(lastSpeaker, 20))
 	logPanel := viewPanelStyle.
 		Width(rightW).
 		Height(panelH).
-		Render(lipgloss.JoinVertical(lipgloss.Left, logHeader, logMeta, m.logViewport.View()))
+		Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.renderPanelHeader("DEBATE LOG", logMeta, maxInt(24, rightW-4)),
+			m.logViewport.View(),
+		))
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, personaPanel, " ", logPanel)
 	footer := m.renderFooter(contentWidth)
@@ -71,12 +102,16 @@ func (m model) View() string {
 }
 
 func (m model) renderCompactView() string {
-	status := m.statusBadge()
-	title := lipgloss.JoinHorizontal(lipgloss.Left, viewTitleStyle.Render("Debate Studio"), " ", status)
-	meta := viewMetaStyle.Render(fmt.Sprintf("turns=%d personas=%d follow=%s", m.totalTurnCount, len(m.personas), onOff(m.autoFollow)))
-	commands := viewCmdRibbonStyle.Render("/ask | /stop | /follow | /show | /load | /help | /exit")
-	hint := viewHintStyle.Render("hint: " + m.inputHint())
-	prompt := viewInputBoxStyle.Render(viewInputLabelStyle.Render("INPUT") + " " + m.input.View())
+	title := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		viewBrandPillStyle.Render("DEBATE"),
+		" ",
+		m.statusBadge(),
+	)
+	meta := viewMetricStyle.Render(fmt.Sprintf("turns=%d personas=%d follow=%s", m.totalTurnCount, len(m.personas), onOff(m.autoFollow)))
+	commands := m.renderCommandRibbon(maxInt(20, m.width-2))
+	hint := lipgloss.JoinHorizontal(lipgloss.Left, viewHintLabelStyle.Render("hint"), " ", viewHintStyle.Render(m.inputHint()))
+	prompt := viewInputBoxStyle.Render(lipgloss.JoinHorizontal(lipgloss.Left, viewInputLabelStyle.Render("INPUT"), " ", m.input.View()))
 
 	return viewChromeStyle.Render(lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -90,61 +125,95 @@ func (m model) renderCompactView() string {
 }
 
 func (m model) renderHero(width int) string {
-	titleLine := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		viewTitleStyle.Render("Debate Studio"),
-		" ",
-		viewSubtitleStyle.Render("multi-persona orchestration"),
-	)
-
 	runtime := "idle"
 	if m.running {
 		runtime = time.Since(m.runningSince).Round(time.Second).String()
 	}
 
-	chips := []string{
+	headerLeft := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		viewBrandPillStyle.Render("Debate Studio"),
+		" ",
+		viewSubtitleStyle.Render("multi-persona orchestration"),
+	)
+	headerRight := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		m.statusBadge(),
+		" ",
+		m.renderChip("runtime "+runtime, m.running),
+	)
+
+	chips := lipgloss.JoinHorizontal(
+		lipgloss.Left,
 		m.renderChip(fmt.Sprintf("personas %d", len(m.personas)), false),
 		m.renderChip(fmt.Sprintf("turns %d", m.totalTurnCount), m.running),
 		m.renderChip(fmt.Sprintf("follow %s", onOff(m.autoFollow)), m.autoFollow),
-		m.renderChip(fmt.Sprintf("runtime %s", runtime), m.running),
-	}
+	)
 
-	progress := viewMetaStyle.Render(m.progressLine(maxInt(38, width-8)))
-	activity := viewPanelMetaStyle.Render("speaker activity  " + m.personaActivityLine(maxInt(18, width-26)))
+	progress := viewMetricStyle.Render("progress  " + m.progressLine(maxInt(34, width-12)))
+	activity := viewPanelMetaStyle.Render("activity  " + m.personaActivityLine(maxInt(16, width-12)))
 
-	resultLine := ""
+	result := ""
 	if m.lastResultPath != "" {
-		resultLine = viewPanelMetaStyle.Render("latest result  " + truncateText(m.lastResultPath, maxInt(20, width-18)))
+		result = lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			viewResultTagStyle.Render("latest result"),
+			" ",
+			viewResultPathStyle.Render(truncateText(m.lastResultPath, maxInt(20, width-18))),
+		)
 	}
 
-	return viewHeroStyle.Width(width).Render(lipgloss.JoinVertical(
+	inner := lipgloss.JoinVertical(
 		lipgloss.Left,
-		lipgloss.JoinHorizontal(lipgloss.Left, titleLine, "  ", m.statusBadge()),
-		lipgloss.JoinHorizontal(lipgloss.Left, chips...),
+		joinEnds(maxInt(20, width-2), headerLeft, headerRight),
+		chips,
 		progress,
 		activity,
-		resultLine,
-	))
+		result,
+	)
+	return viewHeroStyle.Width(width).Render(inner)
 }
 
 func (m model) renderCommandRibbon(width int) string {
-	line := "Enter run · Ctrl+P/N history · Ctrl+F follow · PgUp/PgDn/Home/End scroll · Ctrl+L clear"
+	items := []string{
+		lipgloss.JoinHorizontal(lipgloss.Left, viewKeycapStyle.Render("Enter"), " ", viewCmdTextStyle.Render("run")),
+		lipgloss.JoinHorizontal(lipgloss.Left, viewKeycapStyle.Render("Ctrl+P/N"), " ", viewCmdTextStyle.Render("history")),
+		lipgloss.JoinHorizontal(lipgloss.Left, viewKeycapStyle.Render("Ctrl+F"), " ", viewCmdTextStyle.Render("follow")),
+		lipgloss.JoinHorizontal(lipgloss.Left, viewKeycapStyle.Render("PgUp/PgDn"), " ", viewCmdTextStyle.Render("scroll")),
+		lipgloss.JoinHorizontal(lipgloss.Left, viewKeycapStyle.Render("Ctrl+L"), " ", viewCmdTextStyle.Render("clear")),
+	}
+	line := strings.Join(items, "  ")
 	return viewCmdRibbonStyle.Width(width).Render(truncateText(line, width))
 }
 
 func (m model) renderFooter(width int) string {
-	hint := viewHintStyle.Render("hint: " + m.inputHint())
-	inputBox := viewInputBoxStyle.Width(width).Render(
-		lipgloss.JoinHorizontal(lipgloss.Left, viewInputLabelStyle.Render("INPUT"), " ", m.input.View()),
+	hint := lipgloss.JoinHorizontal(lipgloss.Left, viewHintLabelStyle.Render("hint"), " ", viewHintStyle.Render(m.inputHint()))
+	charCount := len([]rune(strings.TrimSpace(m.input.Value())))
+	inputLine := viewInputBoxStyle.Width(width).Render(
+		joinEnds(
+			maxInt(20, width-4),
+			lipgloss.JoinHorizontal(lipgloss.Left, viewInputLabelStyle.Render("INPUT"), " ", m.input.View()),
+			viewInputMetaStyle.Render(fmt.Sprintf("%d chars", charCount)),
+		),
 	)
-	return lipgloss.JoinVertical(lipgloss.Left, hint, inputBox)
+	return lipgloss.JoinVertical(lipgloss.Left, hint, inputLine)
+}
+
+func (m model) renderPanelHeader(title string, meta string, width int) string {
+	top := joinEnds(
+		width,
+		viewPanelTitleStyle.Render(title),
+		viewPanelMetaStyle.Render(truncateText(meta, maxInt(8, width/2))),
+	)
+	rule := viewPanelRuleStyle.Render(strings.Repeat("─", maxInt(8, width)))
+	return lipgloss.JoinVertical(lipgloss.Left, top, rule)
 }
 
 func (m model) statusBadge() string {
 	if m.running {
-		return viewRunningBadge.Render("RUNNING " + m.spin.View())
+		return viewStatusRunStyle.Render("RUNNING " + m.spin.View())
 	}
-	return viewIdleBadge.Render("IDLE")
+	return viewStatusIdleStyle.Render("IDLE")
 }
 
 func (m model) renderChip(text string, hot bool) string {
@@ -181,4 +250,32 @@ func (m model) inputHint() string {
 	default:
 		return "일반 문장 입력은 /ask로 자동 처리됩니다."
 	}
+}
+
+func joinEnds(width int, left string, right string) string {
+	left = strings.TrimRight(left, " ")
+	right = strings.TrimRight(right, " ")
+	if width <= 0 {
+		return left + " " + right
+	}
+
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	if leftW+1+rightW > width {
+		if width <= leftW+1 {
+			return truncateText(left, width)
+		}
+		right = truncateText(right, maxInt(6, width-leftW-1))
+		rightW = lipgloss.Width(right)
+		if leftW+1+rightW > width {
+			left = truncateText(left, maxInt(6, width-rightW-1))
+			leftW = lipgloss.Width(left)
+		}
+	}
+
+	gap := width - leftW - rightW
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
 }
