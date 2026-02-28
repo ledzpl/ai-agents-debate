@@ -17,106 +17,142 @@ func (m *model) handleCommand(line string) tea.Cmd {
 	command, arg := parseCommand(line)
 	switch command {
 	case "/exit":
-		if m.debateCancel != nil {
-			m.debateCancel()
-			m.debateCancel = nil
-		}
-		m.appendLog("bye")
-		return tea.Quit
+		return m.handleExitCommand()
 	case "/stop":
-		if arg != "" {
-			m.appendLog("usage: /stop")
-			return nil
-		}
-		if !m.running || m.debateCancel == nil {
-			m.appendLog("no running debate to stop")
-			return nil
-		}
-		m.appendLog("stop requested...")
-		m.debateCancel()
-		return nil
+		return m.handleStopCommand(arg)
 	case "/follow":
-		mode := strings.ToLower(strings.TrimSpace(arg))
-		if mode == "" || mode == "toggle" {
-			m.autoFollow = !m.autoFollow
-			m.appendLog(fmt.Sprintf("auto-follow: %s", onOff(m.autoFollow)))
-			if m.autoFollow {
-				m.logViewport.GotoBottom()
-			}
-			return nil
-		}
-		switch mode {
-		case "on":
-			m.autoFollow = true
-			m.logViewport.GotoBottom()
-			m.appendLog("auto-follow: ON")
-			return nil
-		case "off":
-			m.autoFollow = false
-			m.appendLog("auto-follow: OFF")
-			return nil
-		default:
-			m.appendLog("usage: /follow [on|off|toggle]")
-			return nil
-		}
+		return m.handleFollowCommand(arg)
 	case "/help":
-		if arg != "" {
-			m.appendLog("usage: /help")
-			return nil
-		}
-		m.appendHelp()
-		return nil
+		return m.handleHelpCommand(arg)
 	case "/load":
-		if arg != "" {
-			m.appendLog("usage: /load")
-			return nil
-		}
-		return loadPersonasCmd(m.personaPath, m.loader)
+		return m.handleLoadCommand(arg)
 	case "/show":
-		if arg != "" {
-			m.appendLog("usage: /show")
-			return nil
-		}
-		m.appendPersonaList()
-		return nil
+		return m.handleShowCommand(arg)
 	case "/ask":
-		if arg == "" {
-			m.appendLog("usage: /ask <problem>")
-			return nil
-		}
-		if m.running {
-			m.appendLog("a debate is already running")
-			return nil
-		}
-		if len(m.personas) == 0 {
-			m.appendLog("no personas loaded; use /load")
-			return nil
-		}
-		m.running = true
-		m.autoFollow = true
-		m.runningSince = m.now()
-		m.totalTurnCount = 0
-		m.personaTurnCount = 0
-		m.speakerTurns = make(map[string]int)
-		m.lastSpeakerName = ""
-
-		runCtx, cancel := context.WithCancel(m.ctx)
-		m.debateCancel = cancel
-
-		m.appendLog("==== debate start ====")
-		m.appendLog("running debate: " + arg)
-		return tea.Batch(
-			runDebateCmd(runCtx, m.runner, arg, m.personas, m.outputDir, m.now),
-			m.spin.Tick,
-		)
+		return m.handleAskCommand(arg)
 	default:
-		if strings.HasPrefix(strings.TrimSpace(line), "/") {
-			m.appendLog("unknown command. Use /ask <problem>, /stop, /follow, /show, /load, /help, /exit")
-			return nil
-		}
-		// Plain text is treated as a debate prompt.
-		return m.handleCommand("/ask " + strings.TrimSpace(line))
+		return m.handleUnknownOrPlainText(line)
 	}
+}
+
+func (m *model) handleExitCommand() tea.Cmd {
+	if m.debateCancel != nil {
+		m.debateCancel()
+		m.debateCancel = nil
+	}
+	m.appendLog("bye")
+	return tea.Quit
+}
+
+func (m *model) handleStopCommand(arg string) tea.Cmd {
+	if arg != "" {
+		m.appendLog("usage: /stop")
+		return nil
+	}
+	if !m.running || m.debateCancel == nil {
+		m.appendLog("no running debate to stop")
+		return nil
+	}
+	m.appendLog("stop requested...")
+	m.debateCancel()
+	return nil
+}
+
+func (m *model) handleFollowCommand(arg string) tea.Cmd {
+	mode := strings.ToLower(strings.TrimSpace(arg))
+	if mode == "" || mode == "toggle" {
+		m.autoFollow = !m.autoFollow
+		if m.autoFollow {
+			m.logViewport.GotoBottom()
+		}
+		m.appendLog(fmt.Sprintf("auto-follow: %s", onOff(m.autoFollow)))
+		return nil
+	}
+
+	switch mode {
+	case "on":
+		m.autoFollow = true
+		m.logViewport.GotoBottom()
+		m.appendLog("auto-follow: ON")
+	case "off":
+		m.autoFollow = false
+		m.appendLog("auto-follow: OFF")
+	default:
+		m.appendLog("usage: /follow [on|off|toggle]")
+	}
+	return nil
+}
+
+func (m *model) handleHelpCommand(arg string) tea.Cmd {
+	if arg != "" {
+		m.appendLog("usage: /help")
+		return nil
+	}
+	m.appendHelp()
+	return nil
+}
+
+func (m *model) handleLoadCommand(arg string) tea.Cmd {
+	if arg != "" {
+		m.appendLog("usage: /load")
+		return nil
+	}
+	return loadPersonasCmd(m.personaPath, m.loader)
+}
+
+func (m *model) handleShowCommand(arg string) tea.Cmd {
+	if arg != "" {
+		m.appendLog("usage: /show")
+		return nil
+	}
+	m.appendPersonaList()
+	return nil
+}
+
+func (m *model) handleAskCommand(arg string) tea.Cmd {
+	if arg == "" {
+		m.appendLog("usage: /ask <problem>")
+		return nil
+	}
+	if m.running {
+		m.appendLog("a debate is already running")
+		return nil
+	}
+	if len(m.personas) == 0 {
+		m.appendLog("no personas loaded; use /load")
+		return nil
+	}
+	return m.startDebate(arg)
+}
+
+func (m *model) startDebate(problem string) tea.Cmd {
+	m.running = true
+	m.autoFollow = true
+	m.runningSince = m.now()
+	m.totalTurnCount = 0
+	m.personaTurnCount = 0
+	m.speakerTurns = make(map[string]int)
+	m.lastSpeakerName = ""
+
+	runCtx, cancel := context.WithCancel(m.ctx)
+	m.debateCancel = cancel
+
+	m.appendLog("==== debate start ====")
+	m.appendLog("running debate: " + problem)
+	return tea.Batch(
+		runDebateCmd(runCtx, m.runner, problem, m.personas, m.outputDir, m.now),
+		m.spin.Tick,
+	)
+}
+
+func (m *model) handleUnknownOrPlainText(line string) tea.Cmd {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "/") {
+		m.appendLog("unknown command. Use /ask <problem>, /stop, /follow, /show, /load, /help, /exit")
+		return nil
+	}
+	// Plain text is treated as a debate prompt.
+	return m.handleCommand("/ask " + trimmed)
 }
 
 func (m *model) appendPersonaList() {

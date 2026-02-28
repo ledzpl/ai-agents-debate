@@ -52,7 +52,7 @@ func parseConsensus(raw string) (orchestrator.Consensus, error) {
 		return orchestrator.Consensus{}, err
 	}
 
-	requiredKeys := []string{"reached", "score", "summary"}
+	requiredKeys := []string{"reached", "score", "summary", "rationale"}
 	for _, key := range requiredKeys {
 		if _, ok := rawMap[key]; !ok {
 			return orchestrator.Consensus{}, errors.New("missing required consensus key: " + key)

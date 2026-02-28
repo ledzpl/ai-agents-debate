@@ -196,172 +196,169 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.width = typed.Width
+		m.height = typed.Height
 		m.resizeLayout()
 		return m, nil
 
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
-		if m.running {
-			return m, cmd
-		}
-		return m, nil
+		return m, m.updateSpinner(typed)
 
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC:
-			if m.debateCancel != nil {
-				m.debateCancel()
-				m.debateCancel = nil
-			}
-			return m, tea.Quit
-		case tea.KeyCtrlF:
-			m.autoFollow = !m.autoFollow
-			if m.autoFollow {
-				m.logViewport.GotoBottom()
-				m.appendLog("auto-follow: ON")
-			} else {
-				m.appendLog("auto-follow: OFF")
-			}
-			return m, nil
-		case tea.KeyCtrlL:
-			m.logs = nil
-			m.refreshLogViewport()
-			return m, nil
-		case tea.KeyCtrlP:
-			m.input.SetValue(m.historyPrev())
-			m.input.CursorEnd()
-			return m, nil
-		case tea.KeyCtrlN:
-			m.input.SetValue(m.historyNext())
-			m.input.CursorEnd()
-			return m, nil
-		case tea.KeyPgUp:
-			m.autoFollow = false
-			m.logViewport.LineUp(scrollStep)
-			return m, nil
-		case tea.KeyPgDown:
-			m.autoFollow = false
-			m.logViewport.LineDown(scrollStep)
-			return m, nil
-		case tea.KeyHome:
-			m.autoFollow = false
-			m.logViewport.GotoTop()
-			return m, nil
-		case tea.KeyEnd:
-			m.autoFollow = true
-			m.logViewport.GotoBottom()
-			return m, nil
-		case tea.KeyEnter:
-			cmdLine := strings.TrimSpace(m.input.Value())
-			m.input.SetValue("")
-			if cmdLine == "" {
-				return m, nil
-			}
-			m.pushHistory(cmdLine)
-			return m, m.handleCommand(cmdLine)
+		if cmd, handled := m.handleKeyMessage(typed); handled {
+			return m, cmd
 		}
 
 	case personasLoadedMsg:
-		if msg.err != nil {
-			m.appendLog(fmt.Sprintf("Failed to load %s: %v", m.personaPath, msg.err))
-			m.appendLog("Use /load after fixing the file.")
-			return m, nil
-		}
-		m.personas = msg.personas
-		m.appendLog(fmt.Sprintf("Loaded %d personas from %s", len(msg.personas), m.personaPath))
+		m.handlePersonasLoaded(typed)
 		return m, nil
 
 	case debateStreamStartedMsg:
-		return m, listenDebateEventsCmd(msg.events)
+		return m, listenDebateEventsCmd(typed.events)
 
 	case debateStreamMsg:
-		if msg.closed {
-			if m.running {
-				m.running = false
-				m.debateCancel = nil
-				m.appendLogs("debate stream closed", "==== debate end ====")
-			}
-			return m, nil
-		}
-		switch payload := msg.payload.(type) {
-		case debateTurnMsg:
-			m.totalTurnCount++
-			if payload.turn.Type == orchestrator.TurnTypePersona {
-				m.personaTurnCount++
-			}
-			m.speakerTurns[payload.turn.SpeakerID]++
-			m.lastSpeakerName = payload.turn.SpeakerName
-			m.appendTurnLog(payload.turn)
-			return m, listenDebateEventsCmd(msg.events)
-		case debateCompletedMsg:
-			m.running = false
-			m.debateCancel = nil
-			if payload.err != nil {
-				m.appendLog(fmt.Sprintf("debate failed: %v", payload.err))
-				m.appendLog("==== debate end ====")
-				return m, nil
-			}
-			if payload.saveErr != nil {
-				m.appendLog(fmt.Sprintf("save failed: %v", payload.saveErr))
-			} else {
-				m.lastResultPath = payload.path
-				m.appendLog("saved result: " + payload.path)
-			}
-
-			if payload.result != nil {
-				m.appendLog("status: " + payload.result.Status)
-				m.appendLog(fmt.Sprintf("consensus score: %.2f", payload.result.Consensus.Score))
-				m.appendLog("summary: " + payload.result.Consensus.Summary)
-			}
-			m.appendLog("==== debate end ====")
-			return m, nil
-		default:
-			return m, listenDebateEventsCmd(msg.events)
-		}
+		return m.handleDebateStreamMessage(typed)
 
 	case debateCompletedMsg:
 		// Backward compatibility: treat direct completion as final event.
-		m.running = false
-		m.debateCancel = nil
-		if msg.err != nil {
-			m.appendLog(fmt.Sprintf("debate failed: %v", msg.err))
-			m.appendLog("==== debate end ====")
-			return m, nil
-		}
-		if msg.saveErr != nil {
-			m.appendLog(fmt.Sprintf("save failed: %v", msg.saveErr))
-		} else {
-			m.lastResultPath = msg.path
-			m.appendLog("saved result: " + msg.path)
-		}
-		if msg.result != nil {
-			m.appendLog("status: " + msg.result.Status)
-			m.appendLog(fmt.Sprintf("consensus score: %.2f", msg.result.Consensus.Score))
-			m.appendLog("summary: " + msg.result.Consensus.Summary)
-		}
-		m.appendLog("==== debate end ====")
+		m.applyDebateCompleted(typed)
 		return m, nil
 	}
 
-	var cmds []tea.Cmd
-	var inputCmd tea.Cmd
-	var viewportCmd tea.Cmd
-	mouseWheelUp := false
-	mouseWheelDown := false
-	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress {
-		switch mm.Button { //nolint:exhaustive
-		case tea.MouseButtonWheelUp:
-			mouseWheelUp = true
-		case tea.MouseButtonWheelDown:
-			mouseWheelDown = true
+	return m, m.updateInteractiveInputs(msg)
+}
+
+func (m *model) updateSpinner(msg spinner.TickMsg) tea.Cmd {
+	var cmd tea.Cmd
+	m.spin, cmd = m.spin.Update(msg)
+	if m.running {
+		return cmd
+	}
+	return nil
+}
+
+func (m *model) handleKeyMessage(msg tea.KeyMsg) (tea.Cmd, bool) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		if m.debateCancel != nil {
+			m.debateCancel()
+			m.debateCancel = nil
 		}
+		return tea.Quit, true
+	case tea.KeyCtrlF:
+		m.autoFollow = !m.autoFollow
+		if m.autoFollow {
+			m.logViewport.GotoBottom()
+		}
+		m.appendLog(fmt.Sprintf("auto-follow: %s", onOff(m.autoFollow)))
+		return nil, true
+	case tea.KeyCtrlL:
+		m.logs = nil
+		m.refreshLogViewport()
+		return nil, true
+	case tea.KeyCtrlP:
+		m.input.SetValue(m.historyPrev())
+		m.input.CursorEnd()
+		return nil, true
+	case tea.KeyCtrlN:
+		m.input.SetValue(m.historyNext())
+		m.input.CursorEnd()
+		return nil, true
+	case tea.KeyPgUp:
+		m.autoFollow = false
+		m.logViewport.LineUp(scrollStep)
+		return nil, true
+	case tea.KeyPgDown:
+		m.autoFollow = false
+		m.logViewport.LineDown(scrollStep)
+		return nil, true
+	case tea.KeyHome:
+		m.autoFollow = false
+		m.logViewport.GotoTop()
+		return nil, true
+	case tea.KeyEnd:
+		m.autoFollow = true
+		m.logViewport.GotoBottom()
+		return nil, true
+	case tea.KeyEnter:
+		cmdLine := strings.TrimSpace(m.input.Value())
+		m.input.SetValue("")
+		if cmdLine == "" {
+			return nil, true
+		}
+		m.pushHistory(cmdLine)
+		return m.handleCommand(cmdLine), true
+	default:
+		return nil, false
+	}
+}
+
+func (m *model) handlePersonasLoaded(msg personasLoadedMsg) {
+	if msg.err != nil {
+		m.appendLog(fmt.Sprintf("Failed to load %s: %v", m.personaPath, msg.err))
+		m.appendLog("Use /load after fixing the file.")
+		return
+	}
+	m.personas = msg.personas
+	m.appendLog(fmt.Sprintf("Loaded %d personas from %s", len(msg.personas), m.personaPath))
+}
+
+func (m *model) handleDebateStreamMessage(msg debateStreamMsg) (tea.Model, tea.Cmd) {
+	if msg.closed {
+		if m.running {
+			m.running = false
+			m.debateCancel = nil
+			m.appendLogs("debate stream closed", "==== debate end ====")
+		}
+		return *m, nil
 	}
 
+	switch payload := msg.payload.(type) {
+	case debateTurnMsg:
+		m.totalTurnCount++
+		if payload.turn.Type == orchestrator.TurnTypePersona {
+			m.personaTurnCount++
+		}
+		m.speakerTurns[payload.turn.SpeakerID]++
+		m.lastSpeakerName = payload.turn.SpeakerName
+		m.appendTurnLog(payload.turn)
+		return *m, listenDebateEventsCmd(msg.events)
+	case debateCompletedMsg:
+		m.applyDebateCompleted(payload)
+		return *m, nil
+	default:
+		return *m, listenDebateEventsCmd(msg.events)
+	}
+}
+
+func (m *model) applyDebateCompleted(msg debateCompletedMsg) {
+	m.running = false
+	m.debateCancel = nil
+	if msg.err != nil {
+		m.appendLog(fmt.Sprintf("debate failed: %v", msg.err))
+		m.appendLog("==== debate end ====")
+		return
+	}
+	if msg.saveErr != nil {
+		m.appendLog(fmt.Sprintf("save failed: %v", msg.saveErr))
+	} else {
+		m.lastResultPath = msg.path
+		m.appendLog("saved result: " + msg.path)
+	}
+	if msg.result != nil {
+		m.appendLog("status: " + msg.result.Status)
+		m.appendLog(fmt.Sprintf("consensus score: %.2f", msg.result.Consensus.Score))
+		m.appendLog("summary: " + msg.result.Consensus.Summary)
+	}
+	m.appendLog("==== debate end ====")
+}
+
+func (m *model) updateInteractiveInputs(msg tea.Msg) tea.Cmd {
+	mouseWheelUp, mouseWheelDown := isMouseWheelScroll(msg)
+	var viewportCmd tea.Cmd
+	var inputCmd tea.Cmd
 	m.logViewport, viewportCmd = m.logViewport.Update(msg)
 	m.input, inputCmd = m.input.Update(msg)
 	if mouseWheelUp {
@@ -370,7 +367,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if mouseWheelDown && m.logViewport.AtBottom() {
 		m.autoFollow = true
 	}
-	cmds = append(cmds, viewportCmd, inputCmd)
+	return tea.Batch(viewportCmd, inputCmd)
+}
 
-	return m, tea.Batch(cmds...)
+func isMouseWheelScroll(msg tea.Msg) (up bool, down bool) {
+	mm, ok := msg.(tea.MouseMsg)
+	if !ok || mm.Action != tea.MouseActionPress {
+		return false, false
+	}
+	switch mm.Button { //nolint:exhaustive
+	case tea.MouseButtonWheelUp:
+		return true, false
+	case tea.MouseButtonWheelDown:
+		return false, true
+	default:
+		return false, false
+	}
 }

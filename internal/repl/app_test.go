@@ -30,6 +30,18 @@ func (f *fakeRunner) Run(_ context.Context, problem string, personas []persona.P
 	}, nil
 }
 
+func TestParseCommandSupportsTabs(t *testing.T) {
+	cmd, arg := parseCommand("ask\tgrowth experiment")
+	if cmd != "/ask" || arg != "growth experiment" {
+		t.Fatalf("unexpected ask parse: %q %q", cmd, arg)
+	}
+
+	cmd, arg = parseCommand("/show\t")
+	if cmd != "/show" || arg != "" {
+		t.Fatalf("unexpected show parse: %q %q", cmd, arg)
+	}
+}
+
 func TestStartAskTwiceCreatesTwoResults(t *testing.T) {
 	tmp := t.TempDir()
 	personaPath := filepath.Join(tmp, "personas.json")

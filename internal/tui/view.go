@@ -8,23 +8,25 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-func (m model) View() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	normalStatusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
-	runStatusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166")).Bold(true).Padding(0, 1)
-	idleStatusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("63")).Bold(true).Padding(0, 1)
-	panelStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	panelTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("219"))
-	inputStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229"))
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+var (
+	viewTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	viewHelpStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	viewNormalStatus    = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
+	viewRunningStatus   = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166")).Bold(true).Padding(0, 1)
+	viewIdleStatus      = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("63")).Bold(true).Padding(0, 1)
+	viewPanelStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	viewPanelTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("219"))
+	viewInputStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229"))
+	viewHintStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+)
 
-	statusBadge := idleStatusStyle.Render("IDLE")
-	extraStatus := normalStatusStyle.Render(fmt.Sprintf("personas=%d follow=%t", len(m.personas), m.autoFollow))
+func (m model) View() string {
+	statusBadge := viewIdleStatus.Render("IDLE")
+	extraStatus := viewNormalStatus.Render(fmt.Sprintf("personas=%d follow=%t", len(m.personas), m.autoFollow))
 	if m.running {
-		statusBadge = runStatusStyle.Render("RUNNING")
+		statusBadge = viewRunningStatus.Render("RUNNING")
 		elapsed := time.Since(m.runningSince).Round(time.Second)
-		extraStatus = normalStatusStyle.Render(
+		extraStatus = viewNormalStatus.Render(
 			fmt.Sprintf(
 				"%s elapsed=%s turns=%d personas=%d",
 				m.spin.View(),
@@ -37,24 +39,24 @@ func (m model) View() string {
 
 	headerLine := lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		titleStyle.Render("Multi-Persona Debate TUI"),
+		viewTitleStyle.Render("Multi-Persona Debate TUI"),
 		"  ",
 		statusBadge,
 		"  ",
 		extraStatus,
 	)
-	help := helpStyle.Render("Enter: 실행  Ctrl+P/N: 히스토리  Ctrl+F: auto-follow 토글  PgUp/PgDn/Home/End: 로그 스크롤  Wheel/트랙패드: 로그 스크롤  Ctrl+L: 로그 초기화")
-	commands := helpStyle.Render("Commands: /ask <problem> | /stop | /follow [on|off|toggle] | /show | /load | /help | /exit")
-	progress := helpStyle.Render(m.progressLine(maxInt(40, m.width-2)))
+	help := viewHelpStyle.Render("Enter: 실행  Ctrl+P/N: 히스토리  Ctrl+F: auto-follow 토글  PgUp/PgDn/Home/End: 로그 스크롤  Wheel/트랙패드: 로그 스크롤  Ctrl+L: 로그 초기화")
+	commands := viewHelpStyle.Render("Commands: /ask <problem> | /stop | /follow [on|off|toggle] | /show | /load | /help | /exit")
+	progress := viewHelpStyle.Render(m.progressLine(maxInt(40, m.width-2)))
 
 	contentWidth := maxInt(40, m.width-2)
 	leftW := minInt(44, maxInt(30, contentWidth/3))
 	rightW := maxInt(32, contentWidth-leftW-3)
 	panelH := maxInt(10, m.height-11)
 
-	personaHeader := panelTitleStyle.Render(fmt.Sprintf("PERSONAS (%d)", len(m.personas)))
+	personaHeader := viewPanelTitleStyle.Render(fmt.Sprintf("PERSONAS (%d)", len(m.personas)))
 	personaBody := m.buildPersonaPanel(maxInt(20, leftW-4))
-	personaPanel := panelStyle.
+	personaPanel := viewPanelStyle.
 		Width(leftW).
 		Height(panelH).
 		Render(lipgloss.JoinVertical(lipgloss.Left, personaHeader, personaBody))
@@ -63,19 +65,19 @@ func (m model) View() string {
 	if strings.TrimSpace(m.lastSpeakerName) != "" {
 		lastSpeaker = m.lastSpeakerName
 	}
-	logHeader := panelTitleStyle.Render(fmt.Sprintf("DEBATE LOG (lines=%d, follow=%s, last=%s)", len(m.logs), onOff(m.autoFollow), truncateText(lastSpeaker, 20)))
-	logPanel := panelStyle.
+	logHeader := viewPanelTitleStyle.Render(fmt.Sprintf("DEBATE LOG (lines=%d, follow=%s, last=%s)", len(m.logs), onOff(m.autoFollow), truncateText(lastSpeaker, 20)))
+	logPanel := viewPanelStyle.
 		Width(rightW).
 		Height(panelH).
 		Render(lipgloss.JoinVertical(lipgloss.Left, logHeader, m.logViewport.View()))
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, personaPanel, " ", logPanel)
 
-	prompt := inputStyle.Render("> ") + m.input.View()
-	hint := hintStyle.Render("hint: " + m.inputHint())
+	prompt := viewInputStyle.Render("> ") + m.input.View()
+	hint := viewHintStyle.Render("hint: " + m.inputHint())
 	lastResult := ""
 	if m.lastResultPath != "" {
-		lastResult = helpStyle.Render("last result: " + m.lastResultPath)
+		lastResult = viewHelpStyle.Render("last result: " + m.lastResultPath)
 	}
 
 	return lipgloss.JoinVertical(

@@ -144,6 +144,12 @@ type Orchestrator struct {
 	cfg Config
 }
 
+type judgeProgress struct {
+	noProgressJudges int
+	hasPrevScore     bool
+	prevScore        float64
+}
+
 func New(llm LLMClient, cfg Config) *Orchestrator {
 	// MaxTurns == 0 means unbounded rounds with safety guards.
 	if cfg.MaxTurns < 0 {
@@ -186,98 +192,42 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 	}
 	res.Personas = normalized
 
-	noProgressJudges := 0
-	hasPrevJudgeScore := false
-	prevJudgeScore := 0.0
+	progress := judgeProgress{}
 
 	for i := 0; ; i++ {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
 			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("debate canceled: %w", ctx.Err())
-		default:
+			return res, fmt.Errorf("debate canceled: %w", err)
 		}
 
-		if o.cfg.MaxTurns > 0 && i >= o.cfg.MaxTurns {
-			return o.finalizeWithModerator(ctx, &res, started, StatusMaxTurnsReached, onTurn)
-		}
-		if reachedDurationLimit(started, o.cfg.MaxDuration) {
-			return o.finalizeWithModerator(ctx, &res, started, StatusDurationReached, onTurn)
+		if status, shouldStop := o.preTurnStatus(started, i); shouldStop {
+			return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
 		}
 
+		turnNo := i + 1
 		speaker := normalized[i%len(normalized)]
-		turnOut, err := o.llm.GenerateTurn(ctx, GenerateTurnInput{
-			Problem:  res.Problem,
-			Personas: normalized,
-			Turns:    res.Turns,
-			Speaker:  speaker,
-		})
+		personaTurn, err := o.generatePersonaTurn(ctx, &res, normalized, speaker, turnNo)
 		if err != nil {
 			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("generate turn %d: %w", i+1, err)
+			return res, fmt.Errorf("generate turn %d: %w", turnNo, err)
 		}
-		addUsage(&res.Metrics, turnOut.Usage)
-
-		content := strings.TrimSpace(turnOut.Content)
-		if content == "" {
-			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("turn %d was empty", i+1)
-		}
-
-		turn := Turn{
-			Index:       i + 1,
-			SpeakerID:   speaker.ID,
-			SpeakerName: speaker.Name,
-			Type:        TurnTypePersona,
-			Content:     content,
-			Timestamp:   time.Now().UTC(),
-		}
-		res.Turns = append(res.Turns, turn)
+		res.Turns = append(res.Turns, personaTurn)
 		if onTurn != nil {
-			onTurn(turn)
+			onTurn(personaTurn)
 		}
 
 		if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
 			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
 		}
 
-		shouldJudge := shouldJudgeConsensus(i, len(normalized))
-		if o.cfg.MaxTurns > 0 && i+1 >= o.cfg.MaxTurns {
-			shouldJudge = true
-		}
-		if shouldJudge {
-			judgeOut, err := o.llm.JudgeConsensus(ctx, JudgeConsensusInput{
-				Problem:  res.Problem,
-				Personas: normalized,
-				Turns:    res.Turns,
-			})
+		if o.shouldJudgeAtTurn(i, len(normalized)) {
+			status, done, err := o.evaluateConsensus(ctx, &res, normalized, turnNo, &progress)
 			if err != nil {
 				finalizeResult(&res, started, StatusError)
-				return res, fmt.Errorf("judge consensus at turn %d: %w", i+1, err)
+				return res, fmt.Errorf("judge consensus at turn %d: %w", turnNo, err)
 			}
-			addUsage(&res.Metrics, judgeOut.Usage)
-			res.Consensus = judgeOut.Consensus
-
-			if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
-				return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
-			}
-
-			if res.Consensus.Reached && res.Consensus.Score >= o.cfg.ConsensusThreshold {
-				return o.finalizeWithModerator(ctx, &res, started, StatusConsensusReached, onTurn)
-			}
-
-			if hasPrevJudgeScore {
-				if res.Consensus.Score <= prevJudgeScore+o.cfg.NoProgressEpsilon {
-					noProgressJudges++
-				} else {
-					noProgressJudges = 0
-				}
-			}
-			prevJudgeScore = res.Consensus.Score
-			hasPrevJudgeScore = true
-
-			if noProgressJudges >= o.cfg.MaxNoProgressJudges {
-				return o.finalizeWithModerator(ctx, &res, started, StatusNoProgressReached, onTurn)
+			if done {
+				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
 			}
 		}
 
@@ -286,33 +236,10 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 
 		nextSpeaker := normalized[(i+1)%len(normalized)]
-		moderatorOut, err := o.llm.GenerateModerator(ctx, GenerateModeratorInput{
-			Problem:       res.Problem,
-			Personas:      normalized,
-			Turns:         res.Turns,
-			PreviousTurn:  turn,
-			NextSpeaker:   nextSpeaker,
-			CurrentTurnNo: i + 1,
-		})
+		moderatorTurn, err := o.generateModeratorTurn(ctx, &res, normalized, personaTurn, nextSpeaker, turnNo)
 		if err != nil {
 			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("generate moderator after turn %d: %w", i+1, err)
-		}
-		addUsage(&res.Metrics, moderatorOut.Usage)
-
-		moderatorContent := strings.TrimSpace(moderatorOut.Content)
-		if moderatorContent == "" {
-			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("moderator turn after %d was empty", i+1)
-		}
-
-		moderatorTurn := Turn{
-			Index:       i + 1,
-			SpeakerID:   ModeratorSpeakerID,
-			SpeakerName: ModeratorSpeakerName,
-			Type:        TurnTypeModerator,
-			Content:     moderatorContent,
-			Timestamp:   time.Now().UTC(),
+			return res, fmt.Errorf("generate moderator after turn %d: %w", turnNo, err)
 		}
 		res.Turns = append(res.Turns, moderatorTurn)
 		if onTurn != nil {
@@ -322,6 +249,116 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
 		}
 	}
+}
+
+func (o *Orchestrator) preTurnStatus(started time.Time, turnIndex int) (string, bool) {
+	if o.cfg.MaxTurns > 0 && turnIndex >= o.cfg.MaxTurns {
+		return StatusMaxTurnsReached, true
+	}
+	if reachedDurationLimit(started, o.cfg.MaxDuration) {
+		return StatusDurationReached, true
+	}
+	return "", false
+}
+
+func (o *Orchestrator) generatePersonaTurn(ctx context.Context, res *Result, personas []persona.Persona, speaker persona.Persona, turnNo int) (Turn, error) {
+	out, err := o.llm.GenerateTurn(ctx, GenerateTurnInput{
+		Problem:  res.Problem,
+		Personas: personas,
+		Turns:    res.Turns,
+		Speaker:  speaker,
+	})
+	if err != nil {
+		return Turn{}, err
+	}
+	addUsage(&res.Metrics, out.Usage)
+
+	content := strings.TrimSpace(out.Content)
+	if content == "" {
+		return Turn{}, fmt.Errorf("turn %d was empty", turnNo)
+	}
+	return Turn{
+		Index:       nextTurnIndex(res.Turns),
+		SpeakerID:   speaker.ID,
+		SpeakerName: speaker.Name,
+		Type:        TurnTypePersona,
+		Content:     content,
+		Timestamp:   time.Now().UTC(),
+	}, nil
+}
+
+func (o *Orchestrator) shouldJudgeAtTurn(turnIndex int, personaCount int) bool {
+	if o.cfg.MaxTurns > 0 && turnIndex+1 >= o.cfg.MaxTurns {
+		return true
+	}
+	return shouldJudgeConsensus(turnIndex, personaCount)
+}
+
+func (o *Orchestrator) evaluateConsensus(ctx context.Context, res *Result, personas []persona.Persona, turnNo int, progress *judgeProgress) (string, bool, error) {
+	judgeOut, err := o.llm.JudgeConsensus(ctx, JudgeConsensusInput{
+		Problem:  res.Problem,
+		Personas: personas,
+		Turns:    res.Turns,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	addUsage(&res.Metrics, judgeOut.Usage)
+	res.Consensus = judgeOut.Consensus
+
+	if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
+		return StatusTokenLimitReached, true, nil
+	}
+	if res.Consensus.Reached && res.Consensus.Score >= o.cfg.ConsensusThreshold {
+		return StatusConsensusReached, true, nil
+	}
+
+	progress.update(res.Consensus.Score, o.cfg.NoProgressEpsilon)
+	if progress.noProgressJudges >= o.cfg.MaxNoProgressJudges {
+		return StatusNoProgressReached, true, nil
+	}
+	return "", false, nil
+}
+
+func (o *Orchestrator) generateModeratorTurn(ctx context.Context, res *Result, personas []persona.Persona, previousTurn Turn, nextSpeaker persona.Persona, turnNo int) (Turn, error) {
+	out, err := o.llm.GenerateModerator(ctx, GenerateModeratorInput{
+		Problem:       res.Problem,
+		Personas:      personas,
+		Turns:         res.Turns,
+		PreviousTurn:  previousTurn,
+		NextSpeaker:   nextSpeaker,
+		CurrentTurnNo: turnNo,
+	})
+	if err != nil {
+		return Turn{}, err
+	}
+	addUsage(&res.Metrics, out.Usage)
+
+	content := strings.TrimSpace(out.Content)
+	if content == "" {
+		return Turn{}, fmt.Errorf("moderator turn after %d was empty", turnNo)
+	}
+
+	return Turn{
+		Index:       nextTurnIndex(res.Turns),
+		SpeakerID:   ModeratorSpeakerID,
+		SpeakerName: ModeratorSpeakerName,
+		Type:        TurnTypeModerator,
+		Content:     content,
+		Timestamp:   time.Now().UTC(),
+	}, nil
+}
+
+func (p *judgeProgress) update(score float64, epsilon float64) {
+	if p.hasPrevScore {
+		if score <= p.prevScore+epsilon {
+			p.noProgressJudges++
+		} else {
+			p.noProgressJudges = 0
+		}
+	}
+	p.prevScore = score
+	p.hasPrevScore = true
 }
 
 func addUsage(metrics *Metrics, usage Usage) {

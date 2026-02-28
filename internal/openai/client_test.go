@@ -32,3 +32,10 @@ func TestParseConsensusMissingRequiredKey(t *testing.T) {
 		t.Fatal("expected missing key error")
 	}
 }
+
+func TestParseConsensusMissingRationale(t *testing.T) {
+	_, err := parseConsensus(`{"reached":true,"score":0.9,"summary":"ok"}`)
+	if err == nil {
+		t.Fatal("expected missing rationale error")
+	}
+}

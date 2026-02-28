@@ -51,6 +51,11 @@ func TestParseCommand(t *testing.T) {
 	if cmd != "/follow" || arg != "off" {
 		t.Fatalf("unexpected follow parse: %q %q", cmd, arg)
 	}
+
+	cmd, arg = parseCommand("/ask\tnew market strategy")
+	if cmd != "/ask" || arg != "new market strategy" {
+		t.Fatalf("unexpected tab parse: %q %q", cmd, arg)
+	}
 }
 
 func TestWrapLogLinesToWidth(t *testing.T) {

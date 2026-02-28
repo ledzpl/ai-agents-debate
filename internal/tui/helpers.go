@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -17,12 +18,12 @@ func parseCommand(line string) (command string, arg string) {
 		return "", ""
 	}
 
-	cmd, rest, found := strings.Cut(line, " ")
-	cmd = normalizeCommand(cmd)
-	if !found {
-		return cmd, ""
+	splitAt := strings.IndexFunc(line, unicode.IsSpace)
+	if splitAt == -1 {
+		return normalizeCommand(line), ""
 	}
-	return cmd, strings.TrimSpace(rest)
+	cmd := normalizeCommand(line[:splitAt])
+	return cmd, strings.TrimSpace(line[splitAt+1:])
 }
 
 func normalizeCommand(cmd string) string {
