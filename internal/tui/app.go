@@ -109,6 +109,8 @@ type model struct {
 	runningSince     time.Time
 	totalTurnCount   int
 	personaTurnCount int
+	speakerTurns     map[string]int
+	lastSpeakerName  string
 	autoFollow       bool
 	debateCancel     context.CancelFunc
 
@@ -182,6 +184,7 @@ func newModel(ctx context.Context, cfg modelConfig) model {
 		width:         defaultWidth,
 		height:        defaultHeight,
 		autoFollow:    true,
+		speakerTurns:  make(map[string]int),
 		historyCursor: 0,
 	}
 	m.refreshLogViewport()
@@ -291,6 +294,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if payload.turn.Type == orchestrator.TurnTypePersona {
 				m.personaTurnCount++
 			}
+			m.speakerTurns[payload.turn.SpeakerID]++
+			m.lastSpeakerName = payload.turn.SpeakerName
 			m.appendTurnLog(payload.turn)
 			return m, listenDebateEventsCmd(msg.events)
 		case debateCompletedMsg:

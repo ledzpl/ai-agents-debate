@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -108,6 +109,17 @@ func wrapLogLinesToWidth(lines []string, width int) string {
 	return strings.Join(wrapLogLines(lines, width), "\n")
 }
 
+func truncateText(text string, width int) string {
+	text = strings.TrimSpace(text)
+	if width <= 0 || runewidth.StringWidth(text) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	return runewidth.Truncate(text, width, "…")
+}
+
 func formatTurnLines(turn orchestrator.Turn) []string {
 	header := renderTurnHeader(turn)
 	lines := []string{
@@ -121,6 +133,7 @@ func formatTurnLines(turn orchestrator.Turn) []string {
 	for _, line := range contentLines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
+			lines = append(lines, "")
 			continue
 		}
 		lines = append(lines, "  "+trimmed)
@@ -159,7 +172,7 @@ func renderTurnHeader(turn orchestrator.Turn) string {
 		label = "사회자"
 	}
 
-	return lipgloss.JoinHorizontal(
+	header := lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		badgeStyle.Render(badge),
 		" ",
@@ -167,6 +180,13 @@ func renderTurnHeader(turn orchestrator.Turn) string {
 		" | ",
 		nameStyle.Render(label),
 	)
+	if turn.Timestamp.IsZero() {
+		return header
+	}
+
+	timeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	stamp := turn.Timestamp.Local().Format(time.TimeOnly)
+	return lipgloss.JoinHorizontal(lipgloss.Left, header, " | ", timeStyle.Render(stamp))
 }
 
 func speakerColor(turn orchestrator.Turn) lipgloss.Color {

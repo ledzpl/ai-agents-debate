@@ -97,6 +97,8 @@ func (m *model) handleCommand(line string) tea.Cmd {
 		m.runningSince = m.now()
 		m.totalTurnCount = 0
 		m.personaTurnCount = 0
+		m.speakerTurns = make(map[string]int)
+		m.lastSpeakerName = ""
 
 		runCtx, cancel := context.WithCancel(m.ctx)
 		m.debateCancel = cancel
