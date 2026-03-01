@@ -216,6 +216,7 @@ func (a *App) runDebate(ctx context.Context, problem string) {
 	} else {
 		a.lastResultPath = path
 		a.printLine("saved result: " + path)
+		a.printLine("saved markdown: " + output.MarkdownPath(path))
 	}
 
 	a.printLine("status: " + result.Status)

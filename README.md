@@ -7,7 +7,7 @@ Bubble Tea 기반 TUI/REPL 앱으로 OpenAI Responses API를 사용해 멀티 �
 - 멀티 페르소나 순환 토론 + 사회자 개입 + 합의 판정
 - TUI(터미널 인터랙티브) / REPL(비대화형 환경 fallback) 자동 전환
 - `master_name` 기반 롤모델 지식 반영 프롬프트
-- 토론 결과 JSON 자동 저장 (`./outputs`)
+- 토론 결과 JSON + Markdown 자동 저장 (`./outputs`)
 - persona 수가 많아도 패널이 compact/overflow-safe로 렌더링
 
 ## 요구 사항
@@ -118,8 +118,12 @@ REPL 지원 명령:
 
 ## 결과 파일
 
-- 각 토론 결과는 `./outputs/*-debate.json`으로 저장됩니다.
+- 각 토론 결과는 아래 2개 파일로 저장됩니다.
+  - `./outputs/*-debate.json`
+  - `./outputs/*-debate.md` (읽기 좋은 포맷)
 - JSON에는 problem/personas/turns/consensus/status/metrics/timestamps가 포함됩니다.
+- Markdown에는 problem/consensus/personas/turns/metrics가 섹션 + 불릿 목록 형태로 정리됩니다.
+- `## Turns`는 화자별 TOC 링크와 접기(`<details>`) 섹션으로 렌더링됩니다.
 
 ## persona 스키마
 

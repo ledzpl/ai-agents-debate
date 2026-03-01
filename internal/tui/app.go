@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"debate/internal/orchestrator"
+	"debate/internal/output"
 	"debate/internal/persona"
 )
 
@@ -353,6 +354,7 @@ func (m *model) applyDebateCompleted(msg debateCompletedMsg) {
 	} else {
 		m.lastResultPath = msg.path
 		m.appendLog("saved result: " + msg.path)
+		m.appendLog("saved markdown: " + output.MarkdownPath(msg.path))
 	}
 	if msg.result != nil {
 		m.appendLog("status: " + msg.result.Status)
