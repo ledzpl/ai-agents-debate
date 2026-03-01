@@ -209,8 +209,13 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 
 		turnNo := i + 1
 		speaker := normalized[i%len(normalized)]
-		personaTurn, err := o.generatePersonaTurn(ctx, &res, normalized, speaker, turnNo)
+		stepCtx, cancel := o.callContext(ctx, started)
+		personaTurn, err := o.generatePersonaTurn(stepCtx, &res, normalized, speaker, turnNo)
+		cancel()
 		if err != nil {
+			if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
+				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+			}
 			finalizeResult(&res, started, StatusError)
 			return res, fmt.Errorf("generate turn %d: %w", turnNo, err)
 		}
@@ -224,8 +229,13 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 
 		if o.shouldJudgeAtTurn(i, len(normalized)) {
-			status, done, err := o.evaluateConsensus(ctx, &res, normalized, turnNo, &progress)
+			stepCtx, cancel := o.callContext(ctx, started)
+			status, done, err := o.evaluateConsensus(stepCtx, &res, normalized, turnNo, &progress)
+			cancel()
 			if err != nil {
+				if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
+					return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+				}
 				finalizeResult(&res, started, StatusError)
 				return res, fmt.Errorf("judge consensus at turn %d: %w", turnNo, err)
 			}
@@ -239,8 +249,13 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 
 		nextSpeaker := normalized[(i+1)%len(normalized)]
-		moderatorTurn, err := o.generateModeratorTurn(ctx, &res, normalized, personaTurn, nextSpeaker, turnNo)
+		stepCtx, cancel = o.callContext(ctx, started)
+		moderatorTurn, err := o.generateModeratorTurn(stepCtx, &res, normalized, personaTurn, nextSpeaker, turnNo)
+		cancel()
 		if err != nil {
+			if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
+				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+			}
 			finalizeResult(&res, started, StatusError)
 			return res, fmt.Errorf("generate moderator after turn %d: %w", turnNo, err)
 		}
@@ -384,126 +399,4 @@ func addUsage(metrics *Metrics, usage Usage) {
 	metrics.PromptTokens += usage.PromptTokens
 	metrics.CompletionTokens += usage.CompletionTokens
 	metrics.TotalTokens += usage.TotalTokens
-}
-
-func fallbackSummary(turns []Turn) string {
-	if len(turns) == 0 {
-		return "No discussion turns were generated."
-	}
-	last := turns[len(turns)-1]
-	return fmt.Sprintf("Discussion ended without explicit consensus. Last statement by %s: %s", last.SpeakerName, last.Content)
-}
-
-func finalizeResult(res *Result, started time.Time, status string) {
-	res.Status = status
-	res.EndedAt = time.Now().UTC()
-	res.Metrics.LatencyMS = time.Since(started).Milliseconds()
-}
-
-func ensureConsensusSummary(res *Result) {
-	if strings.TrimSpace(res.Consensus.Summary) == "" {
-		res.Consensus.Summary = fallbackSummary(res.Turns)
-	}
-}
-
-func (o *Orchestrator) finalizeWithModerator(ctx context.Context, res *Result, started time.Time, status string, onTurn func(Turn)) (Result, error) {
-	ensureConsensusSummary(res)
-	finalTurn := o.appendFinalModeratorTurn(ctx, res, status)
-	if finalTurn != nil && onTurn != nil {
-		onTurn(*finalTurn)
-	}
-	finalizeResult(res, started, status)
-	return *res, nil
-}
-
-func (o *Orchestrator) appendFinalModeratorTurn(ctx context.Context, res *Result, status string) *Turn {
-	if len(res.Personas) == 0 {
-		return nil
-	}
-
-	input := GenerateFinalModeratorInput{
-		Problem:     res.Problem,
-		Personas:    res.Personas,
-		Turns:       res.Turns,
-		Consensus:   res.Consensus,
-		FinalStatus: status,
-	}
-
-	content := ""
-	// Respect hard stop reasons without making an additional LLM call.
-	if status != StatusTokenLimitReached && status != StatusDurationReached {
-		out, err := o.llm.GenerateFinalModerator(ctx, input)
-		if err == nil {
-			addUsage(&res.Metrics, out.Usage)
-			content = strings.TrimSpace(out.Content)
-		}
-	}
-	if content == "" {
-		content = fallbackFinalModeratorContent(*res, status)
-	}
-
-	finalTurn := Turn{
-		Index:       nextTurnIndex(res.Turns),
-		SpeakerID:   ModeratorSpeakerID,
-		SpeakerName: ModeratorSpeakerName,
-		Type:        TurnTypeModerator,
-		Content:     content,
-		Timestamp:   time.Now().UTC(),
-	}
-	res.Turns = append(res.Turns, finalTurn)
-	return &finalTurn
-}
-
-func nextTurnIndex(turns []Turn) int {
-	if len(turns) == 0 {
-		return 1
-	}
-	last := turns[len(turns)-1].Index
-	if last > 0 {
-		return last + 1
-	}
-
-	// Fallback for malformed historical data with non-positive tail indices.
-	maxIdx := 0
-	for _, t := range turns {
-		if t.Index > maxIdx {
-			maxIdx = t.Index
-		}
-	}
-	return maxIdx + 1
-}
-
-func fallbackFinalModeratorContent(res Result, status string) string {
-	summary := strings.TrimSpace(res.Consensus.Summary)
-	if summary == "" {
-		summary = fallbackSummary(res.Turns)
-	}
-	return fmt.Sprintf(
-		"Final recap: %s\nOverall assessment: status=%s, consensus_score=%.2f.",
-		summary,
-		status,
-		res.Consensus.Score,
-	)
-}
-
-func shouldJudgeConsensus(turnIndex int, personaCount int) bool {
-	if personaCount <= 0 {
-		return true
-	}
-	return (turnIndex+1)%personaCount == 0
-}
-
-func hasNextPersonaTurn(turnIndex int, maxTurns int) bool {
-	if maxTurns <= 0 {
-		return true
-	}
-	return turnIndex+1 < maxTurns
-}
-
-func reachedDurationLimit(started time.Time, maxDuration time.Duration) bool {
-	return maxDuration > 0 && time.Since(started) >= maxDuration
-}
-
-func reachedTokenLimit(totalTokens int, maxTotalTokens int) bool {
-	return maxTotalTokens > 0 && totalTokens >= maxTotalTokens
 }

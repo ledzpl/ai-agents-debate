@@ -15,12 +15,18 @@ type fakeLLM struct {
 	moderatorCalls int
 	finalCalls     int
 	judgeAtTurn    int
+	turnDelay      time.Duration
+	judgeDelay     time.Duration
+	moderatorDelay time.Duration
 	// Optional override for judge summary. Empty string is allowed.
 	useCustomJudgeSummary bool
 	judgeSummary          string
 }
 
-func (f *fakeLLM) GenerateTurn(_ context.Context, input GenerateTurnInput) (GenerateTurnOutput, error) {
+func (f *fakeLLM) GenerateTurn(ctx context.Context, input GenerateTurnInput) (GenerateTurnOutput, error) {
+	if err := waitWithContext(ctx, f.turnDelay); err != nil {
+		return GenerateTurnOutput{}, err
+	}
 	f.generateCalls++
 	return GenerateTurnOutput{
 		Content: fmt.Sprintf("turn %d by %s", f.generateCalls, input.Speaker.Name),
@@ -32,7 +38,10 @@ func (f *fakeLLM) GenerateTurn(_ context.Context, input GenerateTurnInput) (Gene
 	}, nil
 }
 
-func (f *fakeLLM) GenerateModerator(_ context.Context, input GenerateModeratorInput) (GenerateModeratorOutput, error) {
+func (f *fakeLLM) GenerateModerator(ctx context.Context, input GenerateModeratorInput) (GenerateModeratorOutput, error) {
+	if err := waitWithContext(ctx, f.moderatorDelay); err != nil {
+		return GenerateModeratorOutput{}, err
+	}
 	f.moderatorCalls++
 	return GenerateModeratorOutput{
 		Content: "moderator summary before " + input.NextSpeaker.Name,
@@ -56,7 +65,10 @@ func (f *fakeLLM) GenerateFinalModerator(_ context.Context, _ GenerateFinalModer
 	}, nil
 }
 
-func (f *fakeLLM) JudgeConsensus(_ context.Context, input JudgeConsensusInput) (JudgeConsensusOutput, error) {
+func (f *fakeLLM) JudgeConsensus(ctx context.Context, input JudgeConsensusInput) (JudgeConsensusOutput, error) {
+	if err := waitWithContext(ctx, f.judgeDelay); err != nil {
+		return JudgeConsensusOutput{}, err
+	}
 	reached := len(input.Turns) >= f.judgeAtTurn
 	score := 0.2
 	if reached {
@@ -84,6 +96,20 @@ func testPersonas() []persona.Persona {
 	return []persona.Persona{
 		{ID: "a", Name: "Architect", Role: "architecture"},
 		{ID: "o", Name: "Operator", Role: "operations"},
+	}
+}
+
+func waitWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -255,6 +281,39 @@ func TestRunStopsOnTokenLimitWithoutFinalModeratorLLMCall(t *testing.T) {
 	}
 	if result.Turns[len(result.Turns)-1].Type != TurnTypeModerator {
 		t.Fatalf("expected final turn to be moderator, got %s", result.Turns[len(result.Turns)-1].Type)
+	}
+}
+
+func TestRunStopsOnDurationWhenLLMCallExceedsDeadline(t *testing.T) {
+	llm := &fakeLLM{
+		judgeAtTurn: 999,
+		turnDelay:   40 * time.Millisecond,
+	}
+	orch := New(llm, Config{
+		MaxTurns:            0,
+		MaxDuration:         10 * time.Millisecond,
+		MaxTotalTokens:      100000,
+		MaxNoProgressJudges: 10,
+	})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", testPersonas(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if result.Status != StatusDurationReached {
+		t.Fatalf("expected status=%s, got %s", StatusDurationReached, result.Status)
+	}
+	if llm.generateCalls != 0 {
+		t.Fatalf("expected no completed turn due deadline, got %d", llm.generateCalls)
+	}
+	if llm.finalCalls != 0 {
+		t.Fatalf("expected no final moderator llm call on duration stop, got %d", llm.finalCalls)
+	}
+	if len(result.Turns) != 1 {
+		t.Fatalf("expected fallback final moderator only, got %d turns", len(result.Turns))
+	}
+	if result.Turns[0].Type != TurnTypeModerator {
+		t.Fatalf("expected final fallback moderator turn, got %s", result.Turns[0].Type)
 	}
 }
 

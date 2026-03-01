@@ -81,6 +81,24 @@ func TestBuildModeratorUserPromptIncludesNextSpeakerLens(t *testing.T) {
 	if !strings.Contains(prompt, "ask the next speaker to use ideas from this master's books, papers, or articles") {
 		t.Fatalf("expected moderator master instruction, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Moderator balancing guidance") {
+		t.Fatalf("expected balancing guidance section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "one data point, not the whole debate") {
+		t.Fatalf("expected anti-recency guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Recent debate log:") {
+		t.Fatalf("expected recent log section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Debate memory snapshot (anti-recency):") {
+		t.Fatalf("expected memory snapshot section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "window turns considered:") {
+		t.Fatalf("expected memory window summary, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "latest claim per speaker") {
+		t.Fatalf("expected speaker claim memory, prompt=%q", prompt)
+	}
 }
 
 func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
@@ -90,6 +108,75 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "do not invent specific titles/dates") {
 		t.Fatalf("expected anti-hallucination guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "core claim -> reason/mechanism -> practical implication") {
+		t.Fatalf("expected argument structure guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "falsifiable statements") {
+		t.Fatalf("expected specificity guidance, prompt=%q", prompt)
+	}
+}
+
+func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
+	prompt := buildModeratorSystemPrompt()
+	if !strings.Contains(prompt, "Avoid recency bias") {
+		t.Fatalf("expected anti-recency instruction, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "multiple recent turns") {
+		t.Fatalf("expected multi-turn synthesis guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "supporting point and one tension/tradeoff") {
+		t.Fatalf("expected balance requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Debate memory snapshot") {
+		t.Fatalf("expected memory snapshot grounding, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "synthesis -> unresolved tradeoff -> targeted next-speaker question") {
+		t.Fatalf("expected moderator structure guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not introduce external facts") {
+		t.Fatalf("expected no-external-facts guidance, prompt=%q", prompt)
+	}
+}
+
+func TestBuildModeratorUserPromptIncludesMemoryAnchorsAndTension(t *testing.T) {
+	input := orchestrator.GenerateModeratorInput{
+		Problem: "신규 기능 론칭 전략",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "Growth Lead", Role: "growth"},
+			{ID: "p2", Name: "Risk Analyst", Role: "risk"},
+			{ID: "p3", Name: "PM", Role: "product"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerName: "Growth Lead", SpeakerID: "p1", Type: orchestrator.TurnTypePersona, Content: "빠른 실험으로 시장 반응을 확인해야 합니다."},
+			{Index: 1, SpeakerName: orchestrator.ModeratorSpeakerName, SpeakerID: orchestrator.ModeratorSpeakerID, Type: orchestrator.TurnTypeModerator, Content: "속도와 리스크 균형이 필요합니다."},
+			{Index: 2, SpeakerName: "Risk Analyst", SpeakerID: "p2", Type: orchestrator.TurnTypePersona, Content: "가드레일 없이 론칭하면 리스크가 큽니다."},
+			{Index: 2, SpeakerName: orchestrator.ModeratorSpeakerName, SpeakerID: orchestrator.ModeratorSpeakerID, Type: orchestrator.TurnTypeModerator, Content: "측정 지표를 명확히 합시다."},
+			{Index: 3, SpeakerName: "Growth Lead", SpeakerID: "p1", Type: orchestrator.TurnTypePersona, Content: "초기에는 완화된 가드레일로 속도를 확보합시다."},
+		},
+		PreviousTurn: orchestrator.Turn{
+			Index:       3,
+			SpeakerName: "Growth Lead",
+			SpeakerID:   "p1",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "초기에는 완화된 가드레일로 속도를 확보합시다.",
+		},
+		NextSpeaker: persona.Persona{
+			ID:   "p2",
+			Name: "Risk Analyst",
+			Role: "risk",
+		},
+	}
+
+	prompt := buildModeratorUserPrompt(input)
+	if !strings.Contains(prompt, "anchor turns before latest") {
+		t.Fatalf("expected anchor turn section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Growth Lead:") || !strings.Contains(prompt, "Risk Analyst:") {
+		t.Fatalf("expected multi-speaker claims in memory snapshot, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "tension candidate:") {
+		t.Fatalf("expected tension candidate in memory snapshot, prompt=%q", prompt)
 	}
 }
 
@@ -121,5 +208,31 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "judge rationale") {
 		t.Fatalf("expected rationale in prompt, prompt=%q", prompt)
+	}
+}
+
+func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
+	prompt := buildJudgeSystemPrompt()
+	if !strings.Contains(prompt, "Be conservative: set reached=true only if there is clear alignment") {
+		t.Fatalf("expected conservative reached=true rule, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "0.90-1.00: workable consensus") {
+		t.Fatalf("expected score rubric upper band, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "at least two different speakers/turns") {
+		t.Fatalf("expected rationale evidence requirement, prompt=%q", prompt)
+	}
+}
+
+func TestBuildFinalModeratorSystemPromptIsDecisionOriented(t *testing.T) {
+	prompt := buildFinalModeratorSystemPrompt()
+	if !strings.Contains(prompt, "3-5 concise sentences") {
+		t.Fatalf("expected final response length guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "consensus score/rationale as confidence calibration") {
+		t.Fatalf("expected calibration guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "decision-oriented concluding sentence") {
+		t.Fatalf("expected decision-oriented ending guidance, prompt=%q", prompt)
 	}
 }

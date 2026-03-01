@@ -155,6 +155,13 @@ type debateCompletedMsg struct {
 }
 
 func newModel(ctx context.Context, cfg modelConfig) model {
+	if cfg.Loader == nil {
+		cfg.Loader = persona.LoadFromFile
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Placeholder = "Ask anything. /ask <topic> or just type a sentence"

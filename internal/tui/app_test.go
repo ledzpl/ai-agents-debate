@@ -65,6 +65,20 @@ func TestWrapLogLinesToWidth(t *testing.T) {
 	}
 }
 
+func TestNewModelDefaultsLoaderAndClock(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		Runner:      &fakeRunner{},
+	})
+	if m.loader == nil {
+		t.Fatal("expected default loader to be set")
+	}
+	if m.now == nil {
+		t.Fatal("expected default clock to be set")
+	}
+}
+
 func TestHandleAskWithoutPersonas(t *testing.T) {
 	m := newModel(context.Background(), modelConfig{
 		PersonaPath: "./personas.json",

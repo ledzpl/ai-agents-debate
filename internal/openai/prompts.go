@@ -13,12 +13,16 @@ func buildTurnSystemPrompt() string {
 Rules:
 - Respond in the same language as the problem statement.
 - Contribute one concise, concrete argument.
+- Structure your turn as: core claim -> reason/mechanism -> practical implication.
+- When possible, address one strongest counterpoint from another speaker.
+- Prefer specific, falsifiable statements (assumptions, constraints, metrics, tradeoffs).
 - Reference at least one previous point when possible.
 - Avoid repeating your own previous claims.
 - Keep a clearly distinctive voice aligned with the persona profile, especially signature_lens if provided.
 - If a real expert is provided as master_name, use that person's known knowledge from books, papers, and articles as inspiration.
 - When master_name exists, include at least one concrete concept/framework from that body of work in your turn.
 - Do not claim to be the real person, and do not invent specific titles/dates when you are unsure.
+- Keep the response compact (roughly 3-6 sentences unless the user asks otherwise).
 - Return plain text only, without speaker labels or markdown.`)
 }
 
@@ -77,6 +81,15 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 func buildJudgeSystemPrompt() string {
 	return strings.TrimSpace(`You are a strict consensus judge for a multi-persona debate.
 Evaluate whether the participants have reached a workable consensus.
+Judging rules:
+- Be conservative: set reached=true only if there is clear alignment on goal, approach, and immediate next step.
+- Penalize unresolved critical contradictions, blocked dependencies, or unowned risks.
+- Score rubric:
+  - 0.00-0.39: fragmented, incompatible positions.
+  - 0.40-0.69: partial convergence, major unresolved tradeoffs remain.
+  - 0.70-0.89: near-consensus with actionable direction but notable risk gaps.
+  - 0.90-1.00: workable consensus with explicit decision and next-step clarity.
+- In rationale, cite decisive evidence from at least two different speakers/turns when possible.
 Return exactly one JSON object with keys:
 - reached (boolean)
 - score (number from 0 to 1)
@@ -89,7 +102,13 @@ func buildModeratorSystemPrompt() string {
 	return strings.TrimSpace(`You are the moderator of a multi-persona debate.
 Rules:
 - Respond in the same language as the problem statement.
-- Summarize the most recent discussion point in 1-2 sentences.
+- Start by synthesizing the trajectory across multiple recent turns (not just the latest turn) in 1-2 sentences.
+- Avoid recency bias: do not treat the latest statement as the dominant view unless it is corroborated by earlier turns.
+- Explicitly account for at least one supporting point and one tension/tradeoff from different speakers when possible.
+- Use the provided "Debate memory snapshot" as primary grounding context; treat the latest statement as secondary evidence.
+- Keep your intervention structured as: synthesis -> unresolved tradeoff -> targeted next-speaker question.
+- Cite speaker names when possible so the handoff is traceable.
+- Do not introduce external facts not grounded in the provided debate context.
 - Highlight one unresolved issue or tradeoff.
 - Direct the next speaker with one concrete prompt/question tailored to that speaker's signature style.
 - If the next speaker has master_name, explicitly ask them to apply that master's known books, papers, or articles.
@@ -106,10 +125,19 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 		b.WriteString(participantPromptLine(p) + "\n")
 	}
 
+	recentTurns := trimTurns(input.Turns, moderatorRecentLogLimit)
 	b.WriteString("\nRecent debate log:\n")
-	for _, t := range trimTurns(input.Turns, 10) {
+	for _, t := range recentTurns {
 		b.WriteString(fmt.Sprintf("[%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, t.Content))
 	}
+
+	b.WriteString("\nModerator balancing guidance:\n")
+	b.WriteString("- treat the latest persona statement as one data point, not the whole debate.\n")
+	b.WriteString("- ground summary/tradeoff in multiple recent turns and speakers.\n")
+	b.WriteString("- when possible, connect one earlier claim and one counterpoint before directing next speaker.\n")
+
+	b.WriteString("\nDebate memory snapshot (anti-recency):\n")
+	b.WriteString(buildModeratorMemorySnapshot(recentTurns, input.PreviousTurn))
 
 	b.WriteString("\nLatest persona statement:\n")
 	b.WriteString(fmt.Sprintf("[%d][%s] %s\n", input.PreviousTurn.Index, input.PreviousTurn.SpeakerName, input.PreviousTurn.Content))
@@ -134,9 +162,10 @@ func buildFinalModeratorSystemPrompt() string {
 	return strings.TrimSpace(`You are the moderator closing a multi-persona debate.
 Rules:
 - Respond in the same language as the problem statement.
-- Provide a final wrap-up and overall assessment in 2-4 concise sentences.
+- Provide a final wrap-up and overall assessment in 3-5 concise sentences.
 - Include: key agreements, unresolved risks, and a practical next-step recommendation.
-- End with one clear concluding sentence.
+- Incorporate the consensus score/rationale as confidence calibration (without repeating raw JSON).
+- End with one clear decision-oriented concluding sentence.
 - Return plain text only, without markdown.`)
 }
 
