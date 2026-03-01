@@ -127,6 +127,17 @@
       }
     }
 
+    function sanitizeTurnContent(content) {
+      const lines = String(content || "").split("\n");
+      while (lines.length > 0 && !lines[lines.length - 1].trim()) {
+        lines.pop();
+      }
+      if (lines.length > 0 && /^next\s*[:=]/i.test(lines[lines.length - 1].trim())) {
+        lines.pop();
+      }
+      return lines.join("\n").trim();
+    }
+
     async function fetchPersonas(path) {
       const url = path ? "/api/personas?path=" + encodeURIComponent(path) : "/api/personas";
       const res = await fetch(url);
@@ -398,15 +409,21 @@
           if (!turn) {
             return;
           }
-          highlightSpeakerPersona(turn.speaker_id, turn.speaker_name);
+          const turnType = String(turn.type || "").toLowerCase();
+          const isModerator = turnType === "moderator";
+          if (isModerator) {
+            clearActivePersona();
+          } else {
+            highlightSpeakerPersona(turn.speaker_id, turn.speaker_name);
+          }
           turnCount += 1;
           setTurnMeta(turnCount, "진행 중");
           showProgress("토론 진행 중... (" + String(turnCount) + "턴)");
           appendTurnCard(
-            "turn-persona",
-            "TURN " + String(turn.index || "?"),
+            isModerator ? "turn-system" : "turn-persona",
+            (isModerator ? "MOD " : "TURN ") + String(turn.index || "?"),
             turn.speaker_name || turn.speaker_id || "Unknown",
-            turn.content || ""
+            sanitizeTurnContent(turn.content || "")
           );
         });
 

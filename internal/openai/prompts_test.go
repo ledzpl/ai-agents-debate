@@ -127,6 +127,9 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "answer it in your first sentence") {
 		t.Fatalf("expected moderator-question-first guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "NEXT: <persona_id>") {
+		t.Fatalf("expected explicit next speaker line format, prompt=%q", prompt)
+	}
 }
 
 func TestBuildOpeningSpeakerSelectorPrompts(t *testing.T) {
@@ -299,6 +302,9 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	}
 	if !strings.Contains(prompt, "targeted handoff question/request") {
 		t.Fatalf("expected explicit handoff objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "final line must be: NEXT: <persona_id>") {
+		t.Fatalf("expected explicit next-speaker objective, prompt=%q", prompt)
 	}
 }
 

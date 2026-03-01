@@ -23,7 +23,6 @@ const (
 	defaultAddr       = ":8080"
 	maxRequestBytes   = 2 * 1024 * 1024
 	serverStopTimeout = 5 * time.Second
-	maxPathCollisions = 1000
 )
 
 type Runner interface {
@@ -51,6 +50,7 @@ type App struct {
 	runsMu      sync.RWMutex
 	runs        map[string]*debateRun
 	runSeq      uint64
+	outputSeq   uint64
 }
 
 type debateRequest struct {
@@ -508,49 +508,19 @@ func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []p
 
 func (a *App) nextOutputPath() (string, error) {
 	basePath := output.NewTimestampPath(a.outputDir, a.now())
-	available, err := pathAvailable(basePath)
-	if err != nil {
-		return "", err
-	}
-	if available {
+	seq := atomic.AddUint64(&a.outputSeq, 1)
+	if seq == 1 {
 		return basePath, nil
 	}
-
 	ext := filepath.Ext(basePath)
 	stem := strings.TrimSuffix(basePath, ext)
-	for i := 1; i <= maxPathCollisions; i++ {
-		candidate := fmt.Sprintf("%s-%03d%s", stem, i, ext)
-		available, err := pathAvailable(candidate)
-		if err != nil {
-			return "", err
-		}
-		if available {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("failed to allocate unique output path after %d attempts", maxPathCollisions)
-}
-
-func pathAvailable(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return false, nil
-	}
-	if os.IsNotExist(err) {
-		return true, nil
-	}
-	return false, fmt.Errorf("stat output path %q: %w", path, err)
+	return fmt.Sprintf("%s-%06d%s", stem, seq-1, ext), nil
 }
 
 func decodeDebateRequest(body io.Reader) (debateRequest, error) {
 	var req debateRequest
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
+	if err := decodeStrictJSON(body, &req); err != nil {
 		return debateRequest{}, fmt.Errorf("invalid request body: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return debateRequest{}, errors.New("invalid request body: multiple json values are not allowed")
 	}
 
 	req.Problem = strings.TrimSpace(req.Problem)
@@ -562,13 +532,8 @@ func decodeDebateRequest(body io.Reader) (debateRequest, error) {
 
 func decodeStreamStopRequest(body io.Reader) (streamStopRequest, error) {
 	var req streamStopRequest
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
+	if err := decodeStrictJSON(body, &req); err != nil {
 		return streamStopRequest{}, fmt.Errorf("invalid request body: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return streamStopRequest{}, errors.New("invalid request body: multiple json values are not allowed")
 	}
 	req.RunID = strings.TrimSpace(req.RunID)
 	if req.RunID == "" {

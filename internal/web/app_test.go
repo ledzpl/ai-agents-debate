@@ -194,6 +194,52 @@ func TestDebateEndpointAvoidsOutputPathCollision(t *testing.T) {
 	}
 }
 
+func TestNextOutputPathIsUniqueUnderConcurrency(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return nil, nil
+		},
+		Now: func() time.Time {
+			return time.Date(2026, 3, 1, 1, 2, 3, 4, time.UTC)
+		},
+	})
+
+	const n = 120
+	type result struct {
+		path string
+		err  error
+	}
+	out := make(chan result, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			path, err := app.nextOutputPath()
+			out <- result{path: path, err: err}
+		}()
+	}
+	wg.Wait()
+	close(out)
+
+	seen := make(map[string]struct{}, n)
+	for r := range out {
+		if r.err != nil {
+			t.Fatalf("nextOutputPath returned error: %v", r.err)
+		}
+		if _, exists := seen[r.path]; exists {
+			t.Fatalf("duplicate path generated: %s", r.path)
+		}
+		seen[r.path] = struct{}{}
+	}
+	if len(seen) != n {
+		t.Fatalf("expected %d unique paths, got %d", n, len(seen))
+	}
+}
+
 func TestDebateEndpointLoadsPersonasByPath(t *testing.T) {
 	runner := &stubRunner{
 		result: orchestrator.Result{

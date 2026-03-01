@@ -21,6 +21,7 @@ type fakeLLM struct {
 	turnDelay        time.Duration
 	judgeDelay       time.Duration
 	moderatorDelay   time.Duration
+	turnBySpeakerID  map[string]string
 	// Optional override for judge summary. Empty string is allowed.
 	useCustomJudgeSummary bool
 	judgeSummary          string
@@ -31,8 +32,12 @@ func (f *fakeLLM) GenerateTurn(ctx context.Context, input GenerateTurnInput) (Ge
 		return GenerateTurnOutput{}, err
 	}
 	f.generateCalls++
+	content := fmt.Sprintf("turn %d by %s", f.generateCalls, input.Speaker.Name)
+	if custom, ok := f.turnBySpeakerID[strings.TrimSpace(input.Speaker.ID)]; ok {
+		content = custom
+	}
 	return GenerateTurnOutput{
-		Content: fmt.Sprintf("turn %d by %s", f.generateCalls, input.Speaker.Name),
+		Content: content,
 		Usage: Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
@@ -435,6 +440,107 @@ func TestRunUsesSelectedOpeningSpeaker(t *testing.T) {
 	}
 	if result.Turns[0].SpeakerID != "o" {
 		t.Fatalf("expected first persona speaker to be 'o', got %q", result.Turns[0].SpeakerID)
+	}
+}
+
+func TestRunRoutesHandoffTargetAsNextSpeaker(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "x", Name: "X", Role: "analytics"},
+	}
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "a",
+		turnBySpeakerID: map[string]string{
+			"a": "둘 다 검토가 필요합니다. B와 X 모두 의견 부탁해요.\nNEXT: x",
+		},
+	}
+	orch := New(llm, Config{MaxTurns: 2, ConsensusThreshold: 0.75})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", personas, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(result.Turns) != 3 {
+		t.Fatalf("expected 3 turns (A -> X -> final moderator), got %d", len(result.Turns))
+	}
+	if llm.moderatorCalls != 0 {
+		t.Fatalf("expected no interstitial moderator call on direct handoff, got %d", llm.moderatorCalls)
+	}
+	if result.Turns[1].SpeakerID != "x" {
+		t.Fatalf("expected direct next speaker id 'x', got %q", result.Turns[1].SpeakerID)
+	}
+	if !strings.Contains(result.Turns[0].Content, "NEXT: x") {
+		t.Fatalf("expected explicit next-speaker marker in persona turn, got %q", result.Turns[0].Content)
+	}
+	if result.Turns[2].Type != TurnTypeModerator {
+		t.Fatalf("expected final turn to be moderator, got %s", result.Turns[2].Type)
+	}
+}
+
+func TestSelectNextSpeakerIndexFallsBackWhenTargetIsAmbiguous(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "x", Name: "X", Role: "analytics"},
+	}
+
+	fallbackIdx := 1
+	got := selectNextSpeakerIndex(
+		personas,
+		personas[0],
+		"B와 X 둘 다 답해 주세요.",
+		fallbackIdx,
+	)
+	if got != fallbackIdx {
+		t.Fatalf("expected fallback index %d for ambiguous handoff, got %d", fallbackIdx, got)
+	}
+}
+
+func TestSelectNextSpeakerPrefersExplicitDirective(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "x", Name: "X", Role: "analytics"},
+	}
+	got, direct := selectNextSpeaker(
+		personas,
+		personas[0],
+		"B와 X 둘 다 답해 주세요.\nNEXT: x",
+		1,
+	)
+	if !direct {
+		t.Fatal("expected direct handoff from explicit NEXT directive")
+	}
+	if got != 2 {
+		t.Fatalf("expected explicit target index 2, got %d", got)
+	}
+}
+
+func TestRunAppendsCanonicalNextSpeakerLineOnFallback(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+	}
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "a",
+		turnBySpeakerID: map[string]string{
+			"a": "이번에는 반대 의견도 봅시다.",
+		},
+	}
+	orch := New(llm, Config{MaxTurns: 2, ConsensusThreshold: 0.75})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", personas, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(result.Turns) < 1 {
+		t.Fatalf("expected at least one turn, got %d", len(result.Turns))
+	}
+	if !strings.HasSuffix(strings.TrimSpace(result.Turns[0].Content), "NEXT: b") {
+		t.Fatalf("expected canonical next-speaker suffix NEXT: b, got %q", result.Turns[0].Content)
 	}
 }
 

@@ -221,6 +221,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 	}
 
 	progress := judgeProgress{}
+	currentSpeakerIndex := openingSpeakerIndex
 
 	for i := 0; ; i++ {
 		if err := ctx.Err(); err != nil {
@@ -233,7 +234,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 
 		turnNo := i + 1
-		speaker := normalized[(openingSpeakerIndex+i)%len(normalized)]
+		speaker := normalized[currentSpeakerIndex]
 		stepCtx, cancel := o.callContext(ctx, started)
 		personaTurn, err := o.generatePersonaTurn(stepCtx, &res, normalized, speaker, turnNo)
 		cancel()
@@ -273,7 +274,17 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return o.finalizeWithModerator(ctx, &res, started, StatusMaxTurnsReached, onTurn)
 		}
 
-		nextSpeaker := normalized[(openingSpeakerIndex+i+1)%len(normalized)]
+		fallbackNextSpeakerIndex := (currentSpeakerIndex + 1) % len(normalized)
+		nextSpeakerIndex, directHandoff := selectNextSpeaker(normalized, speaker, personaTurn.Content, fallbackNextSpeakerIndex)
+		res.Turns[len(res.Turns)-1].Content = appendCanonicalNextSpeakerLine(
+			res.Turns[len(res.Turns)-1].Content,
+			normalized[nextSpeakerIndex],
+		)
+		if directHandoff {
+			currentSpeakerIndex = nextSpeakerIndex
+			continue
+		}
+		nextSpeaker := normalized[nextSpeakerIndex]
 		stepCtx, cancel = o.callContext(ctx, started)
 		moderatorTurn, err := o.generateModeratorTurn(stepCtx, &res, normalized, personaTurn, nextSpeaker, turnNo)
 		cancel()
@@ -291,6 +302,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
 			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
 		}
+		currentSpeakerIndex = nextSpeakerIndex
 	}
 }
 
