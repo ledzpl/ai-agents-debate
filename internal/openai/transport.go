@@ -15,6 +15,8 @@ import (
 
 const defaultEndpoint = "https://api.openai.com/v1/responses"
 
+const maxResponseBodyBytes = 8 * 1024 * 1024
+
 type responseRequest struct {
 	Model           string     `json:"model"`
 	Input           []inputMsg `json:"input"`
@@ -107,9 +109,12 @@ func (c *Client) doRequest(ctx context.Context, payload []byte) (responseBody, e
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return responseBody{}, fmt.Errorf("read response body: %w", err)
+	}
+	if len(body) > maxResponseBodyBytes {
+		return responseBody{}, fmt.Errorf("read response body: exceeds limit (%d bytes)", maxResponseBodyBytes)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

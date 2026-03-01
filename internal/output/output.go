@@ -34,6 +34,12 @@ func SaveResult(path string, result orchestrator.Result) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
+	jsonPathExisted := false
+	if _, err := os.Stat(path); err == nil {
+		jsonPathExisted = true
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat json result file: %w", err)
+	}
 
 	jsonData, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -46,6 +52,10 @@ func SaveResult(path string, result orchestrator.Result) error {
 	mdPath := MarkdownPath(path)
 	mdData := []byte(formatResultMarkdown(result))
 	if err := writeAtomic(mdPath, mdData, 0o644); err != nil {
+		// Avoid leaving half-written artifacts when markdown write fails.
+		if !jsonPathExisted {
+			_ = os.Remove(path)
+		}
 		return fmt.Errorf("write markdown result file: %w", err)
 	}
 	return nil
@@ -99,6 +109,23 @@ func formatResultMarkdown(result orchestrator.Result) string {
 	var b strings.Builder
 
 	b.WriteString("# Debate Result\n\n")
+	writeResultMetadata(&b, result)
+	b.WriteString("\n## Problem\n\n")
+	b.WriteString(markdownBulletedText(result.Problem, "") + "\n\n")
+
+	writeConsensusSection(&b, result.Consensus)
+
+	writePersonasSection(&b, result.Personas)
+
+	b.WriteString("\n## Turns\n\n")
+	b.WriteString(formatTurnsBySpeaker(result.Turns))
+	b.WriteString("\n")
+
+	writeMetricsSection(&b, result.Metrics)
+	return b.String()
+}
+
+func writeResultMetadata(b *strings.Builder, result orchestrator.Result) {
 	b.WriteString("- status: " + safeText(result.Status) + "\n")
 	b.WriteString(fmt.Sprintf("- consensus_score: %.2f\n", result.Consensus.Score))
 	if !result.StartedAt.IsZero() {
@@ -111,45 +138,45 @@ func formatResultMarkdown(result orchestrator.Result) string {
 		b.WriteString("- duration: " + result.EndedAt.Sub(result.StartedAt).Round(time.Millisecond).String() + "\n")
 	}
 	b.WriteString(fmt.Sprintf("- turns: %d\n", len(result.Turns)))
-	b.WriteString("\n## Problem\n\n")
-	b.WriteString(markdownBulletedText(result.Problem, "") + "\n\n")
+}
 
+func writeConsensusSection(b *strings.Builder, consensus orchestrator.Consensus) {
 	b.WriteString("## Consensus\n\n")
-	b.WriteString(fmt.Sprintf("- reached: %t\n", result.Consensus.Reached))
-	b.WriteString(fmt.Sprintf("- score: %.2f\n", result.Consensus.Score))
-	if strings.TrimSpace(result.Consensus.Summary) != "" {
+	b.WriteString(fmt.Sprintf("- reached: %t\n", consensus.Reached))
+	b.WriteString(fmt.Sprintf("- score: %.2f\n", consensus.Score))
+	if strings.TrimSpace(consensus.Summary) != "" {
 		b.WriteString("\n### Summary\n\n")
-		b.WriteString(markdownBulletedText(result.Consensus.Summary, "") + "\n")
+		b.WriteString(markdownBulletedText(consensus.Summary, "") + "\n")
 	}
-	if strings.TrimSpace(result.Consensus.Rationale) != "" {
+	if strings.TrimSpace(consensus.Rationale) != "" {
 		b.WriteString("\n### Rationale\n\n")
-		b.WriteString(markdownBulletedText(result.Consensus.Rationale, "") + "\n")
+		b.WriteString(markdownBulletedText(consensus.Rationale, "") + "\n")
 	}
+}
 
+func writePersonasSection(b *strings.Builder, personas []persona.Persona) {
 	b.WriteString("\n## Personas\n\n")
-	if len(result.Personas) == 0 {
+	if len(personas) == 0 {
 		b.WriteString("- none\n")
-	} else {
-		for i, p := range result.Personas {
-			line := fmt.Sprintf("%d. **%s** (`%s`) - role: %s, stance: %s",
-				i+1, safeText(persona.DisplayName(p)), safeText(p.ID), safeText(p.Role), safeText(p.Stance))
-			if strings.TrimSpace(p.MasterName) != "" {
-				line += ", master_name: " + safeText(p.MasterName)
-			}
-			b.WriteString(line + "\n")
-		}
+		return
 	}
 
-	b.WriteString("\n## Turns\n\n")
-	b.WriteString(formatTurnsBySpeaker(result.Turns))
-	b.WriteString("\n")
+	for i, p := range personas {
+		line := fmt.Sprintf("%d. **%s** (`%s`) - role: %s, stance: %s",
+			i+1, safeText(persona.DisplayName(p)), safeText(p.ID), safeText(p.Role), safeText(p.Stance))
+		if strings.TrimSpace(p.MasterName) != "" {
+			line += ", master_name: " + safeText(p.MasterName)
+		}
+		b.WriteString(line + "\n")
+	}
+}
 
+func writeMetricsSection(b *strings.Builder, metrics orchestrator.Metrics) {
 	b.WriteString("## Metrics\n\n")
-	b.WriteString(fmt.Sprintf("- latency_ms: %d\n", result.Metrics.LatencyMS))
-	b.WriteString(fmt.Sprintf("- prompt_tokens: %d\n", result.Metrics.PromptTokens))
-	b.WriteString(fmt.Sprintf("- completion_tokens: %d\n", result.Metrics.CompletionTokens))
-	b.WriteString(fmt.Sprintf("- total_tokens: %d\n", result.Metrics.TotalTokens))
-	return b.String()
+	b.WriteString(fmt.Sprintf("- latency_ms: %d\n", metrics.LatencyMS))
+	b.WriteString(fmt.Sprintf("- prompt_tokens: %d\n", metrics.PromptTokens))
+	b.WriteString(fmt.Sprintf("- completion_tokens: %d\n", metrics.CompletionTokens))
+	b.WriteString(fmt.Sprintf("- total_tokens: %d\n", metrics.TotalTokens))
 }
 
 func safeText(v string) string {
@@ -173,11 +200,17 @@ func markdownBulletedText(v string, indent string) string {
 		if trimmed == "" {
 			continue
 		}
-		trimmed = markdownEntityReplacer.Replace(trimmed)
-		if hasListPrefix(trimmed) || strings.HasPrefix(trimmed, "> ") {
+		if strings.HasPrefix(trimmed, "> ") {
+			quoted := strings.TrimPrefix(trimmed, "> ")
+			out = append(out, indent+"> "+markdownEntityReplacer.Replace(quoted))
+			continue
+		}
+		if hasListPrefix(trimmed) {
+			trimmed = markdownEntityReplacer.Replace(trimmed)
 			out = append(out, indent+trimmed)
 			continue
 		}
+		trimmed = markdownEntityReplacer.Replace(trimmed)
 		out = append(out, indent+"- "+trimmed)
 	}
 	if len(out) == 0 {
@@ -274,9 +307,9 @@ func groupTurnsBySpeaker(turns []orchestrator.Turn) []turnSpeakerGroup {
 func speakerGroupKey(turn orchestrator.Turn, speaker string) string {
 	id := strings.TrimSpace(turn.SpeakerID)
 	if id != "" {
-		return strings.ToLower(turn.Type + "|" + id)
+		return turn.Type + "|" + id
 	}
-	return strings.ToLower(turn.Type + "|" + speaker)
+	return turn.Type + "|" + speaker
 }
 
 func displaySpeaker(turn orchestrator.Turn) string {

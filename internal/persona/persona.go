@@ -70,10 +70,11 @@ func NormalizeAndValidate(personas []Persona) ([]Persona, error) {
 		if p.Role == "" {
 			return nil, fmt.Errorf("persona[%d].role is required", i)
 		}
-		if _, exists := seen[p.ID]; exists {
+		idKey := strings.ToLower(p.ID)
+		if _, exists := seen[idKey]; exists {
 			return nil, fmt.Errorf("duplicate persona id: %s", p.ID)
 		}
-		seen[p.ID] = struct{}{}
+		seen[idKey] = struct{}{}
 
 		p.Expertise = trimNonEmpty(p.Expertise)
 		p.SignatureLens = trimNonEmpty(p.SignatureLens)

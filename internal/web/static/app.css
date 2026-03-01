@@ -14,6 +14,8 @@
   --glass-bg: rgba(255, 255, 255, 0.72);
   --glass-border: rgba(255, 255, 255, 0.4);
   --glass-stroke: rgba(0, 0, 0, 0.08);
+  --timeline-line: rgba(0, 113, 227, 0.14);
+  --timeline-dot: rgba(0, 113, 227, 0.55);
   
   --radius-inner: 12px;
   --radius-outer: 20px;
@@ -194,7 +196,7 @@ select:focus {
 .discussion {
   display: flex;
   flex-direction: column;
-  background: transparent;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.12));
   position: relative;
   min-height: 0;
 }
@@ -220,9 +222,10 @@ select:focus {
 
 /* --- Chat Window --- */
 .debate-window {
+  position: relative;
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  padding: 28px 32px 24px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -230,18 +233,43 @@ select:focus {
   min-height: 0;
 }
 
+.debate-window::before {
+  content: "";
+  position: absolute;
+  left: 39px;
+  top: 24px;
+  bottom: 24px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(0, 113, 227, 0.06), var(--timeline-line), rgba(0, 113, 227, 0.06));
+}
+
 .turn-card {
+  position: relative;
   width: 100%;
   max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding-left: 16px;
   animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: calc((var(--turn-order, 1) - 1) * 14ms);
 }
 
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+.turn-card::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 20px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--timeline-dot);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.55);
 }
 
 .turn-head {
@@ -305,13 +333,23 @@ select:focus {
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.turn-card:hover .turn-content {
+  transform: translateY(-1px);
+  border-color: rgba(0, 113, 227, 0.2);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
 }
 
 .turn-persona .turn-content {
-  background: rgba(255, 255, 255, 0.82);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.72));
 }
 
 .turn-system { align-self: center; }
+.turn-system::before {
+  background: rgba(134, 134, 139, 0.55);
+}
 .turn-system .turn-content {
   background: rgba(0,0,0,0.03);
   border: none;
@@ -322,10 +360,15 @@ select:focus {
 }
 
 .turn-summary { align-self: stretch; }
+.turn-summary::before {
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.22);
+}
 .turn-summary .turn-content {
   background: linear-gradient(135deg, #0071e3, #0056b3);
   color: #ffffff;
   border: none;
+  box-shadow: 0 14px 30px rgba(0, 81, 163, 0.24);
 }
 
 /* --- Floating Input Bar --- */
@@ -336,12 +379,12 @@ select:focus {
 }
 
 .compose-box {
-  background: rgba(255, 255, 255, 0.85);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.82));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-radius: 24px;
   padding: 12px;
-  border: 0.5px solid var(--glass-stroke);
+  border: 1px solid rgba(255, 255, 255, 0.72);
   box-shadow: var(--shadow-floating);
   display: flex;
   flex-direction: column;
@@ -349,16 +392,23 @@ select:focus {
 }
 
 textarea#problem {
-  border: none;
-  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.48);
   padding: 8px 12px;
   font-size: 15px;
   resize: none;
   min-height: 44px;
   max-height: 120px;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
-textarea#problem:focus { box-shadow: none; }
+textarea#problem:focus {
+  outline: none;
+  border-color: rgba(0, 113, 227, 0.28);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.1);
+}
 
 .control-row {
   display: flex;
@@ -379,10 +429,14 @@ button#runBtn,
 button#stopBtn {
   background: var(--accent-blue);
   color: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
   padding: 8px 18px;
   font-size: 13px;
   font-weight: 600;
   border-radius: 16px;
+  box-shadow: 0 8px 18px rgba(0, 113, 227, 0.24);
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 button#runBtn:hover,
@@ -440,4 +494,8 @@ button#stopBtn:disabled {
 @media (max-width: 768px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { display: none; } /* Focus on chat on mobile */
+  .control-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .action-buttons button { flex: 1; }
+  .debate-window { padding: 20px 16px; }
+  .debate-window::before { left: 23px; top: 20px; bottom: 20px; }
 }

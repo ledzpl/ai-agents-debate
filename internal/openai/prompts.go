@@ -99,6 +99,48 @@ Rules:
 - Return plain text only, without speaker labels or markdown.`)
 }
 
+func buildOpeningSpeakerSelectorSystemPrompt() string {
+	return strings.TrimSpace(`You choose which persona should speak first in a multi-persona debate.
+Goal:
+- Pick the single most relevant persona to start the discussion for the given problem.
+- Prioritize domain fit, decision leverage at turn 1, and ability to frame useful criteria for others.
+Rules:
+- Choose exactly one persona from the provided candidates.
+- Return exactly one JSON object with keys:
+  - persona_id (string, must match one candidate id exactly)
+  - reason (string, one short sentence)
+- No markdown, no code block, no extra keys, no trailing text.`)
+}
+
+func buildOpeningSpeakerSelectorUserPrompt(input orchestrator.SelectOpeningSpeakerInput) string {
+	var b strings.Builder
+	b.WriteString("Problem:\n")
+	b.WriteString(input.Problem)
+	b.WriteString("\n\nCandidates:\n")
+	for _, p := range input.Personas {
+		b.WriteString(fmt.Sprintf("- id: %s\n", p.ID))
+		b.WriteString(fmt.Sprintf("  name: %s\n", p.Name))
+		b.WriteString(fmt.Sprintf("  role: %s\n", p.Role))
+		if strings.TrimSpace(p.Stance) != "" {
+			b.WriteString("  stance: " + strings.TrimSpace(p.Stance) + "\n")
+		}
+		if strings.TrimSpace(p.Style) != "" {
+			b.WriteString("  style: " + strings.TrimSpace(p.Style) + "\n")
+		}
+		if len(p.Expertise) > 0 {
+			b.WriteString("  expertise: " + strings.Join(p.Expertise, ", ") + "\n")
+		}
+		if len(p.SignatureLens) > 0 {
+			b.WriteString("  signature_lens: " + strings.Join(p.SignatureLens, ", ") + "\n")
+		}
+		if strings.TrimSpace(p.MasterName) != "" {
+			b.WriteString("  master_name: " + strings.TrimSpace(p.MasterName) + "\n")
+		}
+	}
+	b.WriteString("\nSelect the best opening speaker now.")
+	return b.String()
+}
+
 func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
 

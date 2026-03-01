@@ -124,11 +124,27 @@ type JudgeConsensusOutput struct {
 	Usage     Usage
 }
 
+type SelectOpeningSpeakerInput struct {
+	Problem  string
+	Personas []persona.Persona
+}
+
+type SelectOpeningSpeakerOutput struct {
+	PersonaID string
+	Usage     Usage
+}
+
 type LLMClient interface {
 	GenerateTurn(ctx context.Context, input GenerateTurnInput) (GenerateTurnOutput, error)
 	GenerateModerator(ctx context.Context, input GenerateModeratorInput) (GenerateModeratorOutput, error)
 	GenerateFinalModerator(ctx context.Context, input GenerateFinalModeratorInput) (GenerateFinalModeratorOutput, error)
 	JudgeConsensus(ctx context.Context, input JudgeConsensusInput) (JudgeConsensusOutput, error)
+}
+
+// OpeningSpeakerSelector is optional. When implemented, the orchestrator asks
+// the model to choose the best first persona for the given problem.
+type OpeningSpeakerSelector interface {
+	SelectOpeningSpeaker(ctx context.Context, input SelectOpeningSpeakerInput) (SelectOpeningSpeakerOutput, error)
 }
 
 type Config struct {
@@ -199,6 +215,11 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 	}
 	res.Personas = normalized
 
+	openingSpeakerIndex, openingStopStatus, openingShouldStop := o.chooseOpeningSpeakerIndex(ctx, started, &res, normalized)
+	if openingShouldStop {
+		return o.finalizeWithModerator(ctx, &res, started, openingStopStatus, onTurn)
+	}
+
 	progress := judgeProgress{}
 
 	for i := 0; ; i++ {
@@ -212,7 +233,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 
 		turnNo := i + 1
-		speaker := normalized[i%len(normalized)]
+		speaker := normalized[(openingSpeakerIndex+i)%len(normalized)]
 		stepCtx, cancel := o.callContext(ctx, started)
 		personaTurn, err := o.generatePersonaTurn(stepCtx, &res, normalized, speaker, turnNo)
 		cancel()
@@ -252,7 +273,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return o.finalizeWithModerator(ctx, &res, started, StatusMaxTurnsReached, onTurn)
 		}
 
-		nextSpeaker := normalized[(i+1)%len(normalized)]
+		nextSpeaker := normalized[(openingSpeakerIndex+i+1)%len(normalized)]
 		stepCtx, cancel = o.callContext(ctx, started)
 		moderatorTurn, err := o.generateModeratorTurn(stepCtx, &res, normalized, personaTurn, nextSpeaker, turnNo)
 		cancel()
@@ -271,6 +292,36 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
 		}
 	}
+}
+
+func (o *Orchestrator) chooseOpeningSpeakerIndex(ctx context.Context, started time.Time, res *Result, personas []persona.Persona) (int, string, bool) {
+	index := defaultOpeningSpeakerIndex(res.Problem, personas)
+	selector, ok := o.llm.(OpeningSpeakerSelector)
+	if !ok {
+		return index, "", false
+	}
+
+	stepCtx, cancel := o.callContext(ctx, started)
+	out, err := selector.SelectOpeningSpeaker(stepCtx, SelectOpeningSpeakerInput{
+		Problem:  res.Problem,
+		Personas: personas,
+	})
+	cancel()
+	if err != nil {
+		if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
+			return index, status, true
+		}
+		return index, "", false
+	}
+
+	addUsage(&res.Metrics, out.Usage)
+	if idx := findPersonaIndex(personas, out.PersonaID); idx >= 0 {
+		index = idx
+	}
+	if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
+		return index, StatusTokenLimitReached, true
+	}
+	return index, "", false
 }
 
 func (o *Orchestrator) preTurnStatus(started time.Time, turnIndex int) (string, bool) {

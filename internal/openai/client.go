@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"debate/internal/orchestrator"
+	"debate/internal/persona"
 )
 
 const (
@@ -17,6 +18,7 @@ const (
 	finalModeratorMaxOutputToken = 360
 	judgeMaxOutputTokens         = 320
 	judgeRetryMaxOutputTokens    = 512
+	openingSpeakerMaxOutputToken = 180
 )
 
 type Config struct {
@@ -80,6 +82,45 @@ func (c *Client) GenerateTurn(ctx context.Context, input orchestrator.GenerateTu
 		Content: text,
 		Usage:   usage,
 	}, nil
+}
+
+func (c *Client) SelectOpeningSpeaker(ctx context.Context, input orchestrator.SelectOpeningSpeakerInput) (orchestrator.SelectOpeningSpeakerOutput, error) {
+	text, usage, err := c.generatePlainText(
+		ctx,
+		buildOpeningSpeakerSelectorSystemPrompt(),
+		buildOpeningSpeakerSelectorUserPrompt(input),
+		"empty opening speaker output",
+		openingSpeakerMaxOutputToken,
+	)
+	if err != nil {
+		return orchestrator.SelectOpeningSpeakerOutput{}, err
+	}
+
+	personaID, err := parseOpeningSpeakerID(text)
+	if err != nil {
+		return orchestrator.SelectOpeningSpeakerOutput{}, fmt.Errorf("parse opening speaker id: %w", err)
+	}
+	if !containsPersonaID(input.Personas, personaID) {
+		return orchestrator.SelectOpeningSpeakerOutput{}, fmt.Errorf("parse opening speaker id: unknown persona_id %q", personaID)
+	}
+
+	return orchestrator.SelectOpeningSpeakerOutput{
+		PersonaID: personaID,
+		Usage:     usage,
+	}, nil
+}
+
+func containsPersonaID(personas []persona.Persona, id string) bool {
+	needle := strings.TrimSpace(id)
+	if needle == "" {
+		return false
+	}
+	for _, p := range personas {
+		if strings.EqualFold(strings.TrimSpace(p.ID), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) GenerateModerator(ctx context.Context, input orchestrator.GenerateModeratorInput) (orchestrator.GenerateModeratorOutput, error) {

@@ -129,6 +129,33 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	}
 }
 
+func TestBuildOpeningSpeakerSelectorPrompts(t *testing.T) {
+	systemPrompt := buildOpeningSpeakerSelectorSystemPrompt()
+	if !strings.Contains(systemPrompt, "persona_id") {
+		t.Fatalf("expected persona_id requirement, prompt=%q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "exactly one JSON object") {
+		t.Fatalf("expected strict json output rule, prompt=%q", systemPrompt)
+	}
+
+	userPrompt := buildOpeningSpeakerSelectorUserPrompt(orchestrator.SelectOpeningSpeakerInput{
+		Problem: "결제 장애를 줄이려면 무엇부터 해야 하나요?",
+		Personas: []persona.Persona{
+			{ID: "pm", Name: "PM", Role: "prioritization"},
+			{ID: "sre", Name: "SRE", Role: "incident response", Expertise: []string{"on-call", "postmortem"}},
+		},
+	})
+	if !strings.Contains(userPrompt, "Candidates:") {
+		t.Fatalf("expected candidates section, prompt=%q", userPrompt)
+	}
+	if !strings.Contains(userPrompt, "id: sre") {
+		t.Fatalf("expected persona id listing, prompt=%q", userPrompt)
+	}
+	if !strings.Contains(userPrompt, "incident response") {
+		t.Fatalf("expected role context, prompt=%q", userPrompt)
+	}
+}
+
 func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	prompt := buildModeratorSystemPrompt()
 	if !strings.Contains(prompt, "Avoid recency bias") {

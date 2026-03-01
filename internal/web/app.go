@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"debate/internal/orchestrator"
@@ -21,6 +23,7 @@ const (
 	defaultAddr       = ":8080"
 	maxRequestBytes   = 2 * 1024 * 1024
 	serverStopTimeout = 5 * time.Second
+	maxPathCollisions = 1000
 )
 
 type Runner interface {
@@ -45,6 +48,9 @@ type App struct {
 	runner      Runner
 	loader      LoaderFunc
 	now         func() time.Time
+	runsMu      sync.RWMutex
+	runs        map[string]*debateRun
+	runSeq      uint64
 }
 
 type debateRequest struct {
@@ -68,6 +74,27 @@ type streamStartEvent struct {
 	Problem      string `json:"problem"`
 	PersonaPath  string `json:"persona_path,omitempty"`
 	PersonaCount int    `json:"persona_count"`
+}
+
+type streamStartResponse struct {
+	RunID        string `json:"run_id"`
+	Problem      string `json:"problem"`
+	PersonaPath  string `json:"persona_path,omitempty"`
+	PersonaCount int    `json:"persona_count"`
+}
+
+type streamStopRequest struct {
+	RunID string `json:"run_id"`
+}
+
+type streamStopResponse struct {
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
+}
+
+type streamStoppedEvent struct {
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
 }
 
 func NewApp(cfg Config) *App {
@@ -97,6 +124,7 @@ func NewApp(cfg Config) *App {
 		runner:      cfg.Runner,
 		loader:      cfg.Loader,
 		now:         cfg.Now,
+		runs:        make(map[string]*debateRun),
 	}
 }
 
@@ -133,7 +161,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("/", a.handleIndex)
 	mux.HandleFunc("/api/personas", a.handlePersonas)
 	mux.HandleFunc("/api/debate", a.handleDebate)
+	mux.HandleFunc("/api/debate/stream/start", a.handleDebateStreamStart)
 	mux.HandleFunc("/api/debate/stream", a.handleDebateStream)
+	mux.HandleFunc("/api/debate/stream/stop", a.handleDebateStreamStop)
 	return mux
 }
 
@@ -203,6 +233,46 @@ func (a *App) handleDebate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (a *App) handleDebateStreamStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	body := http.MaxBytesReader(w, r.Body, maxRequestBytes)
+	defer body.Close()
+
+	req, err := decodeDebateRequest(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	personas, resolvedPath, err := a.resolvePersonas(req.PersonaPath, req.Personas)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("load personas: %v", err))
+		return
+	}
+
+	runID := a.nextRunID()
+	runCtx, cancel := context.WithCancel(context.Background())
+	run := newDebateRun(runID, streamStartEvent{
+		Problem:      req.Problem,
+		PersonaPath:  resolvedPath,
+		PersonaCount: len(personas),
+	}, cancel)
+	a.storeRun(run)
+
+	go a.executeDebateRun(runCtx, runID, run, req.Problem, personas)
+
+	writeJSON(w, http.StatusAccepted, streamStartResponse{
+		RunID:        runID,
+		Problem:      req.Problem,
+		PersonaPath:  resolvedPath,
+		PersonaCount: len(personas),
+	})
+}
+
 func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -215,16 +285,15 @@ func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	problem := strings.TrimSpace(r.URL.Query().Get("problem"))
-	if problem == "" {
-		writeError(w, http.StatusBadRequest, "problem is required")
+	runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id is required")
 		return
 	}
 
-	personaPath := strings.TrimSpace(r.URL.Query().Get("persona_path"))
-	personas, resolvedPath, err := a.resolvePersonas(personaPath, nil)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("load personas: %v", err))
+	run, ok := a.loadRun(runID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
 
@@ -233,40 +302,108 @@ func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	if err := writeSSE(w, flusher, "start", streamStartEvent{
-		Problem:      problem,
-		PersonaPath:  resolvedPath,
-		PersonaCount: len(personas),
-	}); err != nil {
+	if err := writeSSE(w, flusher, "start", run.start); err != nil {
 		return
 	}
 
-	streamCtx, cancel := context.WithCancel(r.Context())
-	defer cancel()
+	cursor := 0
+	for {
+		newTurns, done, stopped, resp, runErr := run.snapshot(cursor)
+		for _, turn := range newTurns {
+			if err := writeSSE(w, flusher, "turn", turn); err != nil {
+				return
+			}
+			cursor++
+		}
 
-	var streamWriteErr error
-	resp, err := a.runAndSaveDebate(streamCtx, problem, personas, func(turn orchestrator.Turn) {
-		if streamWriteErr != nil {
+		if done {
+			if stopped {
+				_ = writeSSE(w, flusher, "stopped", streamStoppedEvent{
+					RunID:  runID,
+					Status: "stopped",
+				})
+				return
+			}
+			if runErr != nil {
+				_ = writeSSE(w, flusher, "debate_error", map[string]string{
+					"error": runErr.Error(),
+				})
+				return
+			}
+			_ = writeSSE(w, flusher, "complete", resp)
 			return
 		}
-		if writeErr := writeSSE(w, flusher, "turn", turn); writeErr != nil {
-			streamWriteErr = writeErr
-			cancel()
+
+		if err := run.waitForUpdate(r.Context()); err != nil {
+			return
 		}
-	})
-	if streamWriteErr != nil {
+	}
+}
+
+func (a *App) handleDebateStreamStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
 		return
 	}
+
+	body := http.MaxBytesReader(w, r.Body, maxRequestBytes)
+	defer body.Close()
+
+	req, err := decodeStreamStopRequest(body)
 	if err != nil {
-		_ = writeSSE(w, flusher, "debate_error", map[string]string{
-			"error": err.Error(),
-		})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	_ = writeSSE(w, flusher, "complete", resp)
+
+	run, ok := a.loadRun(req.RunID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	run.stop()
+	writeJSON(w, http.StatusOK, streamStopResponse{
+		RunID:  req.RunID,
+		Status: "stopping",
+	})
+}
+
+func (a *App) executeDebateRun(ctx context.Context, runID string, run *debateRun, problem string, personas []persona.Persona) {
+	resp, err := a.runAndSaveDebate(ctx, problem, personas, run.appendTurn)
+	run.finish(resp, err)
+	time.AfterFunc(runRetention, func() {
+		a.deleteRun(runID)
+	})
+}
+
+func (a *App) nextRunID() string {
+	seq := atomic.AddUint64(&a.runSeq, 1)
+	return fmt.Sprintf("run-%s-%06d", a.now().UTC().Format("20060102-150405.000000000"), seq)
+}
+
+func (a *App) storeRun(run *debateRun) {
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	a.runs[run.id] = run
+}
+
+func (a *App) loadRun(runID string) (*debateRun, bool) {
+	a.runsMu.RLock()
+	defer a.runsMu.RUnlock()
+	run, ok := a.runs[runID]
+	return run, ok
+}
+
+func (a *App) deleteRun(runID string) {
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	delete(a.runs, runID)
 }
 
 func (a *App) resolvePersonas(personaPath string, inline []persona.Persona) ([]persona.Persona, string, error) {
+	if len(inline) > 0 && strings.TrimSpace(personaPath) != "" {
+		return nil, "", errors.New("persona_path and personas cannot be used together")
+	}
 	if len(inline) > 0 {
 		normalized, err := persona.NormalizeAndValidate(inline)
 		if err != nil {
@@ -336,11 +473,12 @@ func (a *App) resolvePersonaPath(rawPath string) (loaderPath string, displayPath
 		return "", "", errors.New("persona path must stay within the project directory")
 	}
 	relToBase = filepath.Clean(relToBase)
-	loaderPath = relToBase
-	if !strings.HasPrefix(loaderPath, ".") {
-		loaderPath = "." + string(filepath.Separator) + loaderPath
+	displayPath = filepath.ToSlash(relToBase)
+	if !strings.HasPrefix(displayPath, ".") {
+		displayPath = "." + string(filepath.Separator) + displayPath
+		displayPath = filepath.ToSlash(displayPath)
 	}
-	displayPath = filepath.ToSlash(loaderPath)
+	loaderPath = candidateAbs
 	return loaderPath, displayPath, nil
 }
 
@@ -349,8 +487,14 @@ func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []p
 	if err != nil {
 		return debateResponse{}, fmt.Errorf("run debate: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return debateResponse{}, fmt.Errorf("debate canceled before save: %w", err)
+	}
 
-	savePath := output.NewTimestampPath(a.outputDir, a.now())
+	savePath, err := a.nextOutputPath()
+	if err != nil {
+		return debateResponse{}, fmt.Errorf("prepare output path: %w", err)
+	}
 	if err := output.SaveResult(savePath, result); err != nil {
 		return debateResponse{}, fmt.Errorf("save result: %w", err)
 	}
@@ -360,6 +504,42 @@ func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []p
 		SavedJSONPath:     savePath,
 		SavedMarkdownPath: output.MarkdownPath(savePath),
 	}, nil
+}
+
+func (a *App) nextOutputPath() (string, error) {
+	basePath := output.NewTimestampPath(a.outputDir, a.now())
+	available, err := pathAvailable(basePath)
+	if err != nil {
+		return "", err
+	}
+	if available {
+		return basePath, nil
+	}
+
+	ext := filepath.Ext(basePath)
+	stem := strings.TrimSuffix(basePath, ext)
+	for i := 1; i <= maxPathCollisions; i++ {
+		candidate := fmt.Sprintf("%s-%03d%s", stem, i, ext)
+		available, err := pathAvailable(candidate)
+		if err != nil {
+			return "", err
+		}
+		if available {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("failed to allocate unique output path after %d attempts", maxPathCollisions)
+}
+
+func pathAvailable(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return false, nil
+	}
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return false, fmt.Errorf("stat output path %q: %w", path, err)
 }
 
 func decodeDebateRequest(body io.Reader) (debateRequest, error) {
@@ -376,6 +556,23 @@ func decodeDebateRequest(body io.Reader) (debateRequest, error) {
 	req.Problem = strings.TrimSpace(req.Problem)
 	if req.Problem == "" {
 		return debateRequest{}, errors.New("problem is required")
+	}
+	return req, nil
+}
+
+func decodeStreamStopRequest(body io.Reader) (streamStopRequest, error) {
+	var req streamStopRequest
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return streamStopRequest{}, fmt.Errorf("invalid request body: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return streamStopRequest{}, errors.New("invalid request body: multiple json values are not allowed")
+	}
+	req.RunID = strings.TrimSpace(req.RunID)
+	if req.RunID == "" {
+		return streamStopRequest{}, errors.New("run_id is required")
 	}
 	return req, nil
 }

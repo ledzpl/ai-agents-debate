@@ -11,13 +11,16 @@ import (
 )
 
 type fakeLLM struct {
-	generateCalls  int
-	moderatorCalls int
-	finalCalls     int
-	judgeAtTurn    int
-	turnDelay      time.Duration
-	judgeDelay     time.Duration
-	moderatorDelay time.Duration
+	generateCalls    int
+	moderatorCalls   int
+	finalCalls       int
+	selectCalls      int
+	judgeAtTurn      int
+	openingSpeakerID string
+	selectDelay      time.Duration
+	turnDelay        time.Duration
+	judgeDelay       time.Duration
+	moderatorDelay   time.Duration
 	// Optional override for judge summary. Empty string is allowed.
 	useCustomJudgeSummary bool
 	judgeSummary          string
@@ -61,6 +64,26 @@ func (f *fakeLLM) GenerateFinalModerator(_ context.Context, _ GenerateFinalModer
 			PromptTokens:     4,
 			CompletionTokens: 4,
 			TotalTokens:      8,
+		},
+	}, nil
+}
+
+func (f *fakeLLM) SelectOpeningSpeaker(ctx context.Context, input SelectOpeningSpeakerInput) (SelectOpeningSpeakerOutput, error) {
+	if err := waitWithContext(ctx, f.selectDelay); err != nil {
+		return SelectOpeningSpeakerOutput{}, err
+	}
+	f.selectCalls++
+
+	selectedID := strings.TrimSpace(f.openingSpeakerID)
+	if selectedID == "" && len(input.Personas) > 0 {
+		selectedID = input.Personas[0].ID
+	}
+	return SelectOpeningSpeakerOutput{
+		PersonaID: selectedID,
+		Usage: Usage{
+			PromptTokens:     1,
+			CompletionTokens: 1,
+			TotalTokens:      2,
 		},
 	}, nil
 }
@@ -379,5 +402,76 @@ func TestRequiredConsensusConfirmations(t *testing.T) {
 	}
 	if got := requiredConsensusConfirmations(2); got != defaultConsensusConfirmations {
 		t.Fatalf("expected %d confirmations for multi-persona, got %d", defaultConsensusConfirmations, got)
+	}
+}
+
+func TestDefaultOpeningSpeakerIndexMatchesProblemContext(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "mkt", Name: "Marketing Lead", Role: "growth messaging and user acquisition"},
+		{ID: "sec", Name: "Security Analyst", Role: "security incident response and threat modeling"},
+	}
+	got := defaultOpeningSpeakerIndex("How should we design security incident response playbooks?", personas)
+	if got != 1 {
+		t.Fatalf("expected security persona at index 1, got %d", got)
+	}
+}
+
+func TestRunUsesSelectedOpeningSpeaker(t *testing.T) {
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "o",
+	}
+	orch := New(llm, Config{MaxTurns: 1, ConsensusThreshold: 0.75})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", testPersonas(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if llm.selectCalls != 1 {
+		t.Fatalf("expected 1 opening speaker selection call, got %d", llm.selectCalls)
+	}
+	if len(result.Turns) < 1 {
+		t.Fatalf("expected at least one turn, got %d", len(result.Turns))
+	}
+	if result.Turns[0].SpeakerID != "o" {
+		t.Fatalf("expected first persona speaker to be 'o', got %q", result.Turns[0].SpeakerID)
+	}
+}
+
+func TestRunIgnoresOpeningSpeakerSelectionByName(t *testing.T) {
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "Operator", // name, not persona id
+	}
+	orch := New(llm, Config{MaxTurns: 1, ConsensusThreshold: 0.75})
+
+	result, err := orch.Run(context.Background(), "generic topic", testPersonas(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(result.Turns) < 1 {
+		t.Fatalf("expected at least one turn, got %d", len(result.Turns))
+	}
+	if result.Turns[0].SpeakerID != "a" {
+		t.Fatalf("expected fallback opening speaker id 'a', got %q", result.Turns[0].SpeakerID)
+	}
+}
+
+func TestFinalizeStatusDowngradesToTokenLimitWhenFinalModeratorExceedsCap(t *testing.T) {
+	llm := &fakeLLM{
+		judgeAtTurn: 999,
+	}
+	orch := New(llm, Config{
+		MaxTurns:           1,
+		ConsensusThreshold: 0.75,
+		MaxTotalTokens:     25, // 15(persona)+4(judge)+8(final)=27
+	})
+
+	result, err := orch.Run(context.Background(), "topic", testPersonas(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if result.Status != StatusTokenLimitReached {
+		t.Fatalf("expected status=%s, got %s", StatusTokenLimitReached, result.Status)
 	}
 }

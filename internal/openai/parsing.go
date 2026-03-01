@@ -85,6 +85,44 @@ func parseConsensus(raw string) (orchestrator.Consensus, error) {
 	}, nil
 }
 
+func parseOpeningSpeakerID(raw string) (string, error) {
+	cleaned := strings.TrimSpace(raw)
+	if cleaned == "" {
+		return "", errors.New("empty opening speaker output")
+	}
+
+	cleaned = stripCodeFence(cleaned)
+	jsonText := extractJSONObject(cleaned)
+	if jsonText != "" {
+		var payload struct {
+			PersonaID  string `json:"persona_id"`
+			PersonaID2 string `json:"personaId"`
+		}
+		if err := json.Unmarshal([]byte(jsonText), &payload); err == nil {
+			id := strings.TrimSpace(payload.PersonaID)
+			if id == "" {
+				id = strings.TrimSpace(payload.PersonaID2)
+			}
+			if id != "" {
+				return id, nil
+			}
+		}
+	}
+
+	firstLine := cleaned
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = firstLine[:idx]
+	}
+	firstLine = strings.Trim(firstLine, " \t\r\n\"'`")
+	if firstLine == "" {
+		return "", errors.New("persona_id is required")
+	}
+	if strings.ContainsAny(firstLine, " \t") {
+		return "", errors.New("persona_id is required")
+	}
+	return firstLine, nil
+}
+
 func stripCodeFence(s string) string {
 	s = strings.TrimSpace(s)
 	if !strings.HasPrefix(s, "```") {

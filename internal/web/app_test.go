@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,28 @@ func (s *stubRunner) Run(_ context.Context, problem string, personas []persona.P
 		return orchestrator.Result{}, s.err
 	}
 	return s.result, nil
+}
+
+type stoppableRunner struct {
+	startOnce sync.Once
+	doneOnce  sync.Once
+	started   chan struct{}
+	done      chan struct{}
+}
+
+func (s *stoppableRunner) Run(ctx context.Context, _ string, _ []persona.Persona, _ func(orchestrator.Turn)) (orchestrator.Result, error) {
+	s.startOnce.Do(func() {
+		if s.started != nil {
+			close(s.started)
+		}
+	})
+	<-ctx.Done()
+	s.doneOnce.Do(func() {
+		if s.done != nil {
+			close(s.done)
+		}
+	})
+	return orchestrator.Result{}, ctx.Err()
 }
 
 func TestDebateEndpointWithInlinePersonas(t *testing.T) {
@@ -113,6 +136,64 @@ func TestDebateEndpointWithInlinePersonas(t *testing.T) {
 	}
 }
 
+func TestDebateEndpointAvoidsOutputPathCollision(t *testing.T) {
+	outDir := t.TempDir()
+	fixedNow := time.Date(2026, 3, 1, 1, 2, 3, 4, time.UTC)
+	runner := &stubRunner{
+		result: orchestrator.Result{
+			Problem: "collision test",
+			Personas: []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			},
+			Status:    orchestrator.StatusMaxTurnsReached,
+			Consensus: orchestrator.Consensus{Summary: "done"},
+		},
+	}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   outDir,
+		Runner:      runner,
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: func() time.Time { return fixedNow },
+	})
+
+	makeRequest := func() debateResponse {
+		req := httptest.NewRequest(http.MethodPost, "/api/debate", bytes.NewBufferString(`{"problem":"collision test"}`))
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp debateResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return resp
+	}
+
+	first := makeRequest()
+	second := makeRequest()
+
+	if first.SavedJSONPath == second.SavedJSONPath {
+		t.Fatalf("expected different json paths, got same path %s", first.SavedJSONPath)
+	}
+	if first.SavedMarkdownPath == second.SavedMarkdownPath {
+		t.Fatalf("expected different markdown paths, got same path %s", first.SavedMarkdownPath)
+	}
+	if _, err := os.Stat(first.SavedJSONPath); err != nil {
+		t.Fatalf("first json file missing: %v", err)
+	}
+	if _, err := os.Stat(second.SavedJSONPath); err != nil {
+		t.Fatalf("second json file missing: %v", err)
+	}
+}
+
 func TestDebateEndpointLoadsPersonasByPath(t *testing.T) {
 	runner := &stubRunner{
 		result: orchestrator.Result{
@@ -145,7 +226,10 @@ func TestDebateEndpointLoadsPersonasByPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
 	}
-	if loadedPath != "./custom.json" {
+	if !filepath.IsAbs(loadedPath) {
+		t.Fatalf("expected absolute loader path, got %s", loadedPath)
+	}
+	if filepath.Base(loadedPath) != "custom.json" {
 		t.Fatalf("unexpected loader path: %s", loadedPath)
 	}
 	if len(runner.personas) != len(loadedPersonas) {
@@ -246,7 +330,38 @@ func TestDebateEndpointRejectsInvalidInlinePersonas(t *testing.T) {
 	}
 }
 
-func TestDebateStreamEndpointStreamsTurnsAndComplete(t *testing.T) {
+func TestDebateEndpointRejectsPersonaPathAndInlinePersonasTogether(t *testing.T) {
+	runner := &stubRunner{}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      runner,
+		Loader: func(string) ([]persona.Persona, error) {
+			return nil, errors.New("loader should not be called")
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate", bytes.NewBufferString(`{
+		"problem":"conflict payload",
+		"persona_path":"./custom.json",
+		"personas":[
+			{"id":"p1","name":"Planner","role":"plan"},
+			{"id":"p2","name":"Builder","role":"build"}
+		]
+	}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if runner.callCount != 0 {
+		t.Fatalf("runner must not be called, got %d", runner.callCount)
+	}
+}
+
+func TestDebateStreamStartAndSubscribeStreamsTurnsAndComplete(t *testing.T) {
 	loadedPath := ""
 	loadedPersonas := []persona.Persona{
 		{ID: "p1", Name: "Planner", Role: "plan"},
@@ -277,14 +392,35 @@ func TestDebateStreamEndpointStreamsTurnsAndComplete(t *testing.T) {
 		Now: time.Now,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/debate/stream?problem=stream+test&persona_path=./custom.json", nil)
+	startReq := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{
+		"problem":"stream test",
+		"persona_path":"./custom.json"
+	}`))
+	startRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(startRec, startReq)
+
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected start status: %d body=%s", startRec.Code, startRec.Body.String())
+	}
+	var started streamStartResponse
+	if err := json.Unmarshal(startRec.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if strings.TrimSpace(started.RunID) == "" {
+		t.Fatalf("missing run_id: %#v", started)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/debate/stream?run_id="+started.RunID, nil)
 	rec := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
 	}
-	if loadedPath != "./custom.json" {
+	if !filepath.IsAbs(loadedPath) {
+		t.Fatalf("expected absolute loader path, got %s", loadedPath)
+	}
+	if filepath.Base(loadedPath) != "custom.json" {
 		t.Fatalf("unexpected loader path: %s", loadedPath)
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
@@ -309,7 +445,7 @@ func TestDebateStreamEndpointStreamsTurnsAndComplete(t *testing.T) {
 	}
 }
 
-func TestDebateStreamEndpointValidatesProblem(t *testing.T) {
+func TestDebateStreamStartEndpointValidatesProblem(t *testing.T) {
 	app := NewApp(Config{
 		PersonaPath: "./personas.json",
 		OutputDir:   t.TempDir(),
@@ -323,12 +459,120 @@ func TestDebateStreamEndpointValidatesProblem(t *testing.T) {
 		Now: time.Now,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/debate/stream?problem=+++", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{"problem":"   "}`))
 	rec := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDebateStreamSubscribeRequiresRunID(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return nil, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/debate/stream", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDebateStreamSubscribeUnknownRunID(t *testing.T) {
+	runner := &stubRunner{}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      runner,
+		Loader: func(string) ([]persona.Persona, error) {
+			return nil, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/debate/stream?run_id=missing", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if runner.callCount != 0 {
+		t.Fatalf("runner must not be called, got %d", runner.callCount)
+	}
+}
+
+func TestDebateStreamStopEndpointCancelsRun(t *testing.T) {
+	blocking := &stoppableRunner{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      blocking,
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	startReq := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{"problem":"stop test"}`))
+	startRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected start status: %d body=%s", startRec.Code, startRec.Body.String())
+	}
+
+	var started streamStartResponse
+	if err := json.Unmarshal(startRec.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if strings.TrimSpace(started.RunID) == "" {
+		t.Fatalf("missing run_id: %#v", started)
+	}
+
+	select {
+	case <-blocking.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner did not start")
+	}
+
+	stopReq := httptest.NewRequest(http.MethodPost, "/api/debate/stream/stop", bytes.NewBufferString(`{"run_id":"`+started.RunID+`"}`))
+	stopRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(stopRec, stopReq)
+	if stopRec.Code != http.StatusOK {
+		t.Fatalf("unexpected stop status: %d body=%s", stopRec.Code, stopRec.Body.String())
+	}
+
+	select {
+	case <-blocking.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not canceled")
+	}
+
+	streamReq := httptest.NewRequest(http.MethodGet, "/api/debate/stream?run_id="+started.RunID, nil)
+	streamRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(streamRec, streamReq)
+	if streamRec.Code != http.StatusOK {
+		t.Fatalf("unexpected stream status: %d body=%s", streamRec.Code, streamRec.Body.String())
+	}
+	body := streamRec.Body.String()
+	if !strings.Contains(body, "event: stopped") {
+		t.Fatalf("missing stopped event: %s", body)
 	}
 }
 

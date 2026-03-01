@@ -56,3 +56,30 @@ func TestParseConsensusPicksFirstBalancedJSONObject(t *testing.T) {
 		t.Fatalf("unexpected summary: %s", consensus.Summary)
 	}
 }
+
+func TestParseOpeningSpeakerIDFromJSONObject(t *testing.T) {
+	id, err := parseOpeningSpeakerID(`{"persona_id":"security_analyst","reason":"incident response context"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "security_analyst" {
+		t.Fatalf("unexpected persona id: %s", id)
+	}
+}
+
+func TestParseOpeningSpeakerIDFromSingleLineFallback(t *testing.T) {
+	id, err := parseOpeningSpeakerID("architect")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "architect" {
+		t.Fatalf("unexpected persona id: %s", id)
+	}
+}
+
+func TestParseOpeningSpeakerIDRejectsMissingID(t *testing.T) {
+	_, err := parseOpeningSpeakerID(`{"reason":"missing id"}`)
+	if err == nil {
+		t.Fatal("expected missing persona id error")
+	}
+}

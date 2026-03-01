@@ -22,6 +22,7 @@
 
     let personaGroups = [];
     let selectedPersonaPath = "";
+    let currentRunID = "";
     let currentStream = null;
     let turnCount = 0;
     let stopRequested = false;
@@ -131,6 +132,40 @@
       const res = await fetch(url);
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || "persona 로딩 실패");
+      return payload;
+    }
+
+    async function createDebateRun(problem) {
+      const requestBody = { problem: problem };
+      if (selectedPersonaPath) {
+        requestBody.persona_path = selectedPersonaPath;
+      }
+
+      const res = await fetch("/api/debate/stream/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody)
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload.error || "토론 시작 실패");
+      }
+      if (!payload.run_id) {
+        throw new Error("토론 실행 식별자(run_id)를 받지 못했습니다.");
+      }
+      return payload;
+    }
+
+    async function requestDebateStop(runID) {
+      const res = await fetch("/api/debate/stream/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: runID })
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload.error || "토론 중지 실패");
+      }
       return payload;
     }
 
@@ -322,6 +357,7 @@
       stopRequested = false;
       showProgress("토론을 시작하는 중...");
       closeCurrentStream();
+      currentRunID = "";
 
       try {
         if (typeof EventSource === "undefined") {
@@ -331,18 +367,15 @@
         const problem = problemEl.value.trim();
         if (!problem) throw new Error("토론 주제를 입력해 주세요.");
 
-        const params = new URLSearchParams();
-        params.set("problem", problem);
-        if (selectedPersonaPath) {
-          params.set("persona_path", selectedPersonaPath);
-        }
+        const startPayload = await createDebateRun(problem);
+        currentRunID = String(startPayload.run_id);
 
-        const stream = new EventSource("/api/debate/stream?" + params.toString());
+        const stream = new EventSource("/api/debate/stream?run_id=" + encodeURIComponent(currentRunID));
         currentStream = stream;
         let finished = false;
 
         stream.addEventListener("start", function (ev) {
-          if (finished || stopRequested) {
+          if (finished) {
             return;
           }
           const payload = parseJSON(ev.data) || {};
@@ -358,7 +391,7 @@
         });
 
         stream.addEventListener("turn", function (ev) {
-          if (finished || stopRequested) {
+          if (finished) {
             return;
           }
           const turn = parseJSON(ev.data);
@@ -378,7 +411,7 @@
         });
 
         stream.addEventListener("complete", function (ev) {
-          if (finished || stopRequested) {
+          if (finished) {
             return;
           }
           finished = true;
@@ -400,10 +433,11 @@
           setDebateRunning(false);
           hideProgress();
           closeCurrentStream();
+          currentRunID = "";
         });
 
         stream.addEventListener("debate_error", function (ev) {
-          if (finished || stopRequested) {
+          if (finished) {
             return;
           }
           finished = true;
@@ -415,10 +449,40 @@
           setDebateRunning(false);
           hideProgress();
           closeCurrentStream();
+          currentRunID = "";
+        });
+
+        stream.addEventListener("stopped", function () {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          errorText.textContent = "";
+          clearActivePersona();
+          statusText.textContent = "중지됨";
+          setTurnMeta(turnCount, "중지");
+          hideProgress();
+          setDebateRunning(false);
+          closeCurrentStream();
+          currentRunID = "";
+          appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
         });
 
         stream.onerror = function () {
-          if (finished || stopRequested) {
+          if (finished) {
+            return;
+          }
+          if (stopRequested) {
+            finished = true;
+            errorText.textContent = "";
+            clearActivePersona();
+            statusText.textContent = "중지됨";
+            setTurnMeta(turnCount, "중지");
+            hideProgress();
+            setDebateRunning(false);
+            closeCurrentStream();
+            currentRunID = "";
+            appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
             return;
           }
           finished = true;
@@ -431,6 +495,7 @@
           setDebateRunning(false);
           hideProgress();
           closeCurrentStream();
+          currentRunID = "";
         };
       } catch (err) {
         errorText.textContent = String(err.message || err);
@@ -439,22 +504,25 @@
         setTurnMeta(turnCount, "실패");
         setDebateRunning(false);
         hideProgress();
+        currentRunID = "";
       }
     }
 
-    function stopDebate() {
-      if (!currentStream) {
+    async function stopDebate() {
+      if (!currentRunID) {
         return;
       }
       stopRequested = true;
-      closeCurrentStream();
       errorText.textContent = "";
-      clearActivePersona();
-      statusText.textContent = "중지됨";
-      setTurnMeta(turnCount, "중지");
-      hideProgress();
-      setDebateRunning(false);
-      appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
+      statusText.textContent = "중지 요청 중...";
+      try {
+        await requestDebateStop(currentRunID);
+      } catch (err) {
+        stopRequested = false;
+        statusText.textContent = "토론 실행 중...";
+        errorText.textContent = String(err.message || err);
+        setDebateRunning(true);
+      }
     }
 
     runBtn.addEventListener("click", runDebate);

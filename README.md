@@ -47,7 +47,9 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json --addr :8090
 - `GET /static/*`: 정적 자산 (`app.css`, `app.js`)
 - `GET /api/personas?path=./personas.json`
 - `POST /api/debate`
-- `GET /api/debate/stream?problem=...&persona_path=...` (SSE)
+- `POST /api/debate/stream/start` (run 생성)
+- `GET /api/debate/stream?run_id=...` (SSE 구독)
+- `POST /api/debate/stream/stop` (run 중지)
 
 `POST /api/debate` 요청 규칙:
 
@@ -55,11 +57,21 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json --addr :8090
 - unknown field는 거부됩니다.
 - 여러 JSON 값을 이어 붙인 body는 거부됩니다.
 
+`POST /api/debate/stream/start` 요청 규칙:
+
+- JSON body 스키마는 `POST /api/debate`와 동일합니다.
+- 응답으로 `run_id`를 반환하며, 이후 `GET /api/debate/stream?run_id=...`로 구독합니다.
+
+`POST /api/debate/stream/stop` 요청 규칙:
+
+- JSON body 필드: `run_id`(필수)
+
 SSE 이벤트 타입:
 
 - `start`: 토론 시작 메타 정보
 - `turn`: 생성된 각 토론 턴
 - `complete`: 최종 결과 + 저장 경로
+- `stopped`: 사용자 중지 요청으로 종료
 - `debate_error`: 실행/저장 오류
 
 ## 보안 제약

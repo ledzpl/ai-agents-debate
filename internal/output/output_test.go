@@ -139,6 +139,18 @@ func TestGroupTurnsBySpeakerUsesSpeakerIDKey(t *testing.T) {
 	}
 }
 
+func TestGroupTurnsBySpeakerKeepsCaseSensitiveSpeakerID(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{Index: 1, SpeakerID: "p1", SpeakerName: "Alex", Type: orchestrator.TurnTypePersona, Content: "a"},
+		{Index: 2, SpeakerID: "P1", SpeakerName: "Alex", Type: orchestrator.TurnTypePersona, Content: "b"},
+	}
+
+	groups := groupTurnsBySpeaker(turns)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups for case-sensitive speaker IDs, got %d", len(groups))
+	}
+}
+
 func TestFormatResultMarkdownEscapesHTMLSensitiveChars(t *testing.T) {
 	result := orchestrator.Result{
 		Problem: "<script>alert(1)</script>",
@@ -166,5 +178,15 @@ func TestFormatResultMarkdownEscapesHTMLSensitiveChars(t *testing.T) {
 	}
 	if !strings.Contains(md, "&lt;b&gt;unsafe&lt;/b&gt;") {
 		t.Fatalf("expected escaped turn content, got %q", md)
+	}
+}
+
+func TestMarkdownBulletedTextPreservesBlockquotePrefix(t *testing.T) {
+	got := markdownBulletedText("> quote line\nnext line", "")
+	if !strings.Contains(got, "> quote line") {
+		t.Fatalf("expected blockquote to be preserved, got %q", got)
+	}
+	if !strings.Contains(got, "- next line") {
+		t.Fatalf("expected regular line to become bullet, got %q", got)
 	}
 }

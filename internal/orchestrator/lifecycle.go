@@ -32,6 +32,9 @@ func (o *Orchestrator) finalizeWithModerator(ctx context.Context, res *Result, s
 	finalCtx, cancel := o.callContext(ctx, started)
 	finalTurn := o.appendFinalModeratorTurn(finalCtx, res, status)
 	cancel()
+	if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
+		status = StatusTokenLimitReached
+	}
 	if finalTurn != nil && onTurn != nil {
 		onTurn(*finalTurn)
 	}
@@ -54,7 +57,8 @@ func (o *Orchestrator) appendFinalModeratorTurn(ctx context.Context, res *Result
 
 	content := ""
 	// Respect hard stop reasons without making an additional LLM call.
-	if status != StatusTokenLimitReached && status != StatusDurationReached {
+	if status != StatusTokenLimitReached && status != StatusDurationReached &&
+		!reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
 		out, err := o.llm.GenerateFinalModerator(ctx, input)
 		if err == nil {
 			addUsage(&res.Metrics, out.Usage)

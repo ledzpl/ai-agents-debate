@@ -50,3 +50,13 @@ func TestNormalizeAndValidateDuplicateID(t *testing.T) {
 		t.Fatal("expected duplicate id error")
 	}
 }
+
+func TestNormalizeAndValidateDuplicateIDCaseInsensitive(t *testing.T) {
+	_, err := NormalizeAndValidate([]Persona{
+		{ID: "Architect", Name: "A", Role: "r1"},
+		{ID: "architect", Name: "B", Role: "r2"},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate id error for case-insensitive collision")
+	}
+}
