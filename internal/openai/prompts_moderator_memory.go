@@ -8,11 +8,11 @@ import (
 )
 
 const (
-	moderatorRecentLogLimit     = 12
+	moderatorRecentLogLimit     = 10
 	moderatorMemoryAnchorLimit  = 3
 	moderatorSpeakerClaimLimit  = 4
-	moderatorClaimSummaryRunes  = 140
-	moderatorTensionSummaryRune = 56
+	moderatorClaimSummaryRunes  = 120
+	moderatorTensionSummaryRune = 48
 )
 
 type speakerClaim struct {
@@ -20,21 +20,65 @@ type speakerClaim struct {
 	claim   string
 }
 
-func buildModeratorMemorySnapshot(turns []orchestrator.Turn, previousTurn orchestrator.Turn) string {
+type moderatorMemoryBudget struct {
+	anchorLimit         int
+	speakerClaimLimit   int
+	claimSummaryRunes   int
+	tensionSummaryRunes int
+}
+
+func defaultModeratorMemoryBudget() moderatorMemoryBudget {
+	return moderatorMemoryBudget{
+		anchorLimit:         moderatorMemoryAnchorLimit,
+		speakerClaimLimit:   moderatorSpeakerClaimLimit,
+		claimSummaryRunes:   moderatorClaimSummaryRunes,
+		tensionSummaryRunes: moderatorTensionSummaryRune,
+	}
+}
+
+func deriveModeratorMemoryBudget(compressionLevel int) moderatorMemoryBudget {
+	budget := defaultModeratorMemoryBudget()
+	budget.anchorLimit = shrinkInt(budget.anchorLimit, compressionLevel/2, 2)
+	budget.speakerClaimLimit = shrinkInt(budget.speakerClaimLimit, compressionLevel, 2)
+	budget.claimSummaryRunes = shrinkInt(budget.claimSummaryRunes, 12*compressionLevel, 72)
+	budget.tensionSummaryRunes = shrinkInt(budget.tensionSummaryRunes, 6*compressionLevel, 24)
+	return budget
+}
+
+func normalizeModeratorMemoryBudget(budget moderatorMemoryBudget) moderatorMemoryBudget {
+	defaults := defaultModeratorMemoryBudget()
+	if budget.anchorLimit <= 0 {
+		budget.anchorLimit = defaults.anchorLimit
+	}
+	if budget.speakerClaimLimit <= 0 {
+		budget.speakerClaimLimit = defaults.speakerClaimLimit
+	}
+	if budget.claimSummaryRunes <= 0 {
+		budget.claimSummaryRunes = defaults.claimSummaryRunes
+	}
+	if budget.tensionSummaryRunes <= 0 {
+		budget.tensionSummaryRunes = defaults.tensionSummaryRunes
+	}
+	return budget
+}
+
+func buildModeratorMemorySnapshot(turns []orchestrator.Turn, previousTurn orchestrator.Turn, budget moderatorMemoryBudget) string {
+	budget = normalizeModeratorMemoryBudget(budget)
+
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("- window turns considered: %d\n", len(turns)))
 
-	anchors := selectModeratorAnchorTurns(turns, previousTurn, moderatorMemoryAnchorLimit)
+	anchors := selectModeratorAnchorTurns(turns, previousTurn, budget.anchorLimit)
 	if len(anchors) == 0 {
 		b.WriteString("- anchor turns before latest: none\n")
 	} else {
 		b.WriteString("- anchor turns before latest:\n")
 		for _, t := range anchors {
-			b.WriteString(fmt.Sprintf("  - [%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summarizeTurnContent(t.Content, moderatorClaimSummaryRunes)))
+			b.WriteString(fmt.Sprintf("  - [%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summarizeTurnContent(t.Content, budget.claimSummaryRunes)))
 		}
 	}
 
-	claims := collectLatestSpeakerClaims(turns, moderatorSpeakerClaimLimit)
+	claims := collectLatestSpeakerClaims(turns, budget.speakerClaimLimit, budget.claimSummaryRunes)
 	if len(claims) == 0 {
 		b.WriteString("- latest claim per speaker: unavailable\n")
 	} else {
@@ -44,7 +88,7 @@ func buildModeratorMemorySnapshot(turns []orchestrator.Turn, previousTurn orches
 		}
 	}
 
-	if tension := buildTensionCandidate(claims, previousTurn); tension != "" {
+	if tension := buildTensionCandidate(claims, previousTurn, budget.tensionSummaryRunes); tension != "" {
 		b.WriteString("- tension candidate: " + tension + "\n")
 	}
 	return b.String()
@@ -82,10 +126,10 @@ func selectModeratorAnchorTurns(turns []orchestrator.Turn, previousTurn orchestr
 	return anchors
 }
 
-func collectLatestSpeakerClaims(turns []orchestrator.Turn, limit int) []speakerClaim {
-	claims := collectClaimsBySpeaker(turns, limit, true)
+func collectLatestSpeakerClaims(turns []orchestrator.Turn, limit int, summaryRunes int) []speakerClaim {
+	claims := collectClaimsBySpeaker(turns, limit, summaryRunes, true)
 	if len(claims) == 0 {
-		claims = collectClaimsBySpeaker(turns, limit, false)
+		claims = collectClaimsBySpeaker(turns, limit, summaryRunes, false)
 	}
 	for i, j := 0, len(claims)-1; i < j; i, j = i+1, j-1 {
 		claims[i], claims[j] = claims[j], claims[i]
@@ -93,7 +137,7 @@ func collectLatestSpeakerClaims(turns []orchestrator.Turn, limit int) []speakerC
 	return claims
 }
 
-func collectClaimsBySpeaker(turns []orchestrator.Turn, limit int, personaOnly bool) []speakerClaim {
+func collectClaimsBySpeaker(turns []orchestrator.Turn, limit int, summaryRunes int, personaOnly bool) []speakerClaim {
 	if limit <= 0 {
 		return nil
 	}
@@ -119,13 +163,13 @@ func collectClaimsBySpeaker(turns []orchestrator.Turn, limit int, personaOnly bo
 		seenSpeaker[key] = struct{}{}
 		claims = append(claims, speakerClaim{
 			speaker: speaker,
-			claim:   summarizeTurnContent(t.Content, moderatorClaimSummaryRunes),
+			claim:   summarizeTurnContent(t.Content, summaryRunes),
 		})
 	}
 	return claims
 }
 
-func buildTensionCandidate(claims []speakerClaim, previousTurn orchestrator.Turn) string {
+func buildTensionCandidate(claims []speakerClaim, previousTurn orchestrator.Turn, summaryRunes int) string {
 	if len(claims) < 2 {
 		return ""
 	}
@@ -144,9 +188,9 @@ func buildTensionCandidate(claims []speakerClaim, previousTurn orchestrator.Turn
 				}
 				return fmt.Sprintf("%s (%s) vs %s (%s)",
 					current.speaker,
-					summarizeTurnContent(current.claim, moderatorTensionSummaryRune),
+					summarizeTurnContent(current.claim, summaryRunes),
 					other.speaker,
-					summarizeTurnContent(other.claim, moderatorTensionSummaryRune),
+					summarizeTurnContent(other.claim, summaryRunes),
 				)
 			}
 		}
@@ -156,9 +200,9 @@ func buildTensionCandidate(claims []speakerClaim, previousTurn orchestrator.Turn
 	right := claims[len(claims)-1]
 	return fmt.Sprintf("%s (%s) vs %s (%s)",
 		left.speaker,
-		summarizeTurnContent(left.claim, moderatorTensionSummaryRune),
+		summarizeTurnContent(left.claim, summaryRunes),
 		right.speaker,
-		summarizeTurnContent(right.claim, moderatorTensionSummaryRune),
+		summarizeTurnContent(right.claim, summaryRunes),
 	)
 }
 

@@ -99,6 +99,15 @@ func TestBuildModeratorUserPromptIncludesNextSpeakerLens(t *testing.T) {
 	if !strings.Contains(prompt, "latest claim per speaker") {
 		t.Fatalf("expected speaker claim memory, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Moderator loop status:") {
+		t.Fatalf("expected moderator loop status section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "previous moderator ask:") {
+		t.Fatalf("expected previous moderator ask summary, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "first response after that ask:") {
+		t.Fatalf("expected moderator ask response summary, prompt=%q", prompt)
+	}
 }
 
 func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
@@ -114,6 +123,9 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "falsifiable statements") {
 		t.Fatalf("expected specificity guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "answer it in your first sentence") {
+		t.Fatalf("expected moderator-question-first guidance, prompt=%q", prompt)
 	}
 }
 
@@ -136,6 +148,15 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Do not introduce external facts") {
 		t.Fatalf("expected no-external-facts guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "specific prior claim (speaker + idea)") {
+		t.Fatalf("expected explicit handoff claim targeting, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "decision-forcing") {
+		t.Fatalf("expected decision-forcing moderator question guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Close the loop on your previous intervention") {
+		t.Fatalf("expected moderator loop-closing guidance, prompt=%q", prompt)
 	}
 }
 
@@ -211,6 +232,49 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 	}
 }
 
+func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.T) {
+	input := orchestrator.GenerateTurnInput{
+		Problem: "신규 요금제 실험 전략",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "Growth Lead", Role: "growth"},
+			{ID: "p2", Name: "Risk Analyst", Role: "risk"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerID: "p1", SpeakerName: "Growth Lead", Type: orchestrator.TurnTypePersona, Content: "빠르게 실험해서 전환 개선을 확인합시다."},
+			{Index: 2, SpeakerID: orchestrator.ModeratorSpeakerID, SpeakerName: orchestrator.ModeratorSpeakerName, Type: orchestrator.TurnTypeModerator, Content: "리스크 가드레일을 포함한 최소 실험안을 제시해 주세요."},
+			{Index: 3, SpeakerID: "p2", SpeakerName: "Risk Analyst", Type: orchestrator.TurnTypePersona, Content: "가드레일 없이 실험하면 리스크가 큽니다."},
+		},
+		Speaker: persona.Persona{
+			ID:   "p1",
+			Name: "Growth Lead",
+			Role: "growth",
+		},
+	}
+
+	prompt := buildTurnUserPrompt(input)
+	if !strings.Contains(prompt, "Interaction memory snapshot:") {
+		t.Fatalf("expected interaction memory section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "your latest claim:") {
+		t.Fatalf("expected own latest claim reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "most recent peer claim:") {
+		t.Fatalf("expected peer claim reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "active tension candidate:") {
+		t.Fatalf("expected tension candidate reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "latest moderator ask:") {
+		t.Fatalf("expected latest moderator ask reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Turn objective:") {
+		t.Fatalf("expected turn objective section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "targeted handoff question/request") {
+		t.Fatalf("expected explicit handoff objective, prompt=%q", prompt)
+	}
+}
+
 func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	prompt := buildJudgeSystemPrompt()
 	if !strings.Contains(prompt, "Be conservative: set reached=true only if there is clear alignment") {
@@ -234,5 +298,23 @@ func TestBuildFinalModeratorSystemPromptIsDecisionOriented(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "decision-oriented concluding sentence") {
 		t.Fatalf("expected decision-oriented ending guidance, prompt=%q", prompt)
+	}
+}
+
+func TestDerivePromptBudgetCompressesOnLongDebates(t *testing.T) {
+	base := derivePromptBudget(3, 4)
+	compressed := derivePromptBudget(10, 64)
+
+	if compressed.turnRecentLogLimit >= base.turnRecentLogLimit {
+		t.Fatalf("expected compressed turn log window, base=%d compressed=%d", base.turnRecentLogLimit, compressed.turnRecentLogLimit)
+	}
+	if compressed.turnLogSummaryRunes >= base.turnLogSummaryRunes {
+		t.Fatalf("expected compressed turn summary runes, base=%d compressed=%d", base.turnLogSummaryRunes, compressed.turnLogSummaryRunes)
+	}
+	if compressed.moderatorRecentLogLimit >= base.moderatorRecentLogLimit {
+		t.Fatalf("expected compressed moderator log window, base=%d compressed=%d", base.moderatorRecentLogLimit, compressed.moderatorRecentLogLimit)
+	}
+	if compressed.judgeRecentLogLimit >= base.judgeRecentLogLimit {
+		t.Fatalf("expected compressed judge log window, base=%d compressed=%d", base.judgeRecentLogLimit, compressed.judgeRecentLogLimit)
 	}
 }

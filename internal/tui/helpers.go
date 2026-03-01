@@ -10,6 +10,7 @@ import (
 
 	"debate/internal/commandutil"
 	"debate/internal/orchestrator"
+	"debate/internal/turnfmt"
 )
 
 var tuiCommandAliases = map[string]string{
@@ -61,6 +62,28 @@ func minInt(a, b int) int {
 	return b
 }
 
+// styleBoxWidth returns the width to pass into Style.Width so that the
+// rendered block fits the requested outer width.
+func styleBoxWidth(style lipgloss.Style, outerWidth int) int {
+	return maxInt(1, outerWidth-style.GetHorizontalMargins()-style.GetHorizontalBorderSize())
+}
+
+// styleTextWidth returns the visible text area width inside a styled block.
+func styleTextWidth(style lipgloss.Style, outerWidth int) int {
+	return maxInt(1, outerWidth-style.GetHorizontalFrameSize())
+}
+
+// styleBoxHeight returns the height to pass into Style.Height so that the
+// rendered block fits the requested outer height.
+func styleBoxHeight(style lipgloss.Style, outerHeight int) int {
+	return maxInt(1, outerHeight-style.GetVerticalMargins()-style.GetVerticalBorderSize())
+}
+
+// styleTextHeight returns the visible text area height inside a styled block.
+func styleTextHeight(style lipgloss.Style, outerHeight int) int {
+	return maxInt(1, outerHeight-style.GetVerticalFrameSize())
+}
+
 func wrapLogLines(lines []string, width int) []string {
 	if len(lines) == 0 {
 		return nil
@@ -108,29 +131,12 @@ func truncateText(text string, width int) string {
 }
 
 func formatTurnLines(turn orchestrator.Turn) []string {
-	header := renderTurnHeader(turn)
-	lines := []string{
-		"",
-		renderTurnSeparator(turn),
-		header,
-	}
-
-	contentLines := strings.Split(strings.TrimSpace(turn.Content), "\n")
-	appended := false
-	for _, line := range contentLines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			lines = append(lines, "")
-			continue
-		}
-		lines = append(lines, "  "+trimmed)
-		appended = true
-	}
-	if !appended {
-		lines = append(lines, "  (empty)")
-	}
-	lines = append(lines, renderTurnSeparator(turn), "")
-	return lines
+	return turnfmt.FormatLines(turn, turnfmt.Options{
+		Header:         renderTurnHeader,
+		Separator:      renderTurnSeparator,
+		ContentPrefix:  "  ",
+		KeepBlankLines: true,
+	})
 }
 
 func renderTurnSeparator(turn orchestrator.Turn) string {

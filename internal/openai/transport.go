@@ -16,8 +16,9 @@ import (
 const defaultEndpoint = "https://api.openai.com/v1/responses"
 
 type responseRequest struct {
-	Model string     `json:"model"`
-	Input []inputMsg `json:"input"`
+	Model           string     `json:"model"`
+	Input           []inputMsg `json:"input"`
+	MaxOutputTokens int        `json:"max_output_tokens,omitempty"`
 }
 
 type inputMsg struct {

@@ -11,6 +11,14 @@ import (
 	"debate/internal/orchestrator"
 )
 
+const (
+	turnMaxOutputTokens          = 720
+	moderatorMaxOutputTokens     = 760
+	finalModeratorMaxOutputToken = 360
+	judgeMaxOutputTokens         = 320
+	judgeRetryMaxOutputTokens    = 512
+)
+
 type Config struct {
 	APIKey     string
 	BaseURL    string
@@ -62,6 +70,7 @@ func (c *Client) GenerateTurn(ctx context.Context, input orchestrator.GenerateTu
 		buildTurnSystemPrompt(),
 		buildTurnUserPrompt(input),
 		"empty model output",
+		turnMaxOutputTokens,
 	)
 	if err != nil {
 		return orchestrator.GenerateTurnOutput{}, err
@@ -79,6 +88,7 @@ func (c *Client) GenerateModerator(ctx context.Context, input orchestrator.Gener
 		buildModeratorSystemPrompt(),
 		buildModeratorUserPrompt(input),
 		"empty moderator output",
+		moderatorMaxOutputTokens,
 	)
 	if err != nil {
 		return orchestrator.GenerateModeratorOutput{}, err
@@ -96,6 +106,7 @@ func (c *Client) GenerateFinalModerator(ctx context.Context, input orchestrator.
 		buildFinalModeratorSystemPrompt(),
 		buildFinalModeratorUserPrompt(input),
 		"empty final moderator output",
+		finalModeratorMaxOutputToken,
 	)
 	if err != nil {
 		return orchestrator.GenerateFinalModeratorOutput{}, err
@@ -113,10 +124,18 @@ func (c *Client) JudgeConsensus(ctx context.Context, input orchestrator.JudgeCon
 
 	var aggregated orchestrator.Usage
 	for attempt := 0; attempt < 2; attempt++ {
+		maxOutputTokens := judgeMaxOutputTokens
+		if attempt > 0 {
+			maxOutputTokens = judgeRetryMaxOutputTokens
+		}
+		currentUserPrompt := userPrompt
+		if attempt > 0 {
+			currentUserPrompt += "\n\nReturn only one minified JSON object on a single line. No markdown/code fence."
+		}
 		resp, err := c.callResponses(ctx, []inputMsg{
 			makeMessage("system", systemPrompt),
-			makeMessage("user", userPrompt),
-		})
+			makeMessage("user", currentUserPrompt),
+		}, maxOutputTokens)
 		if err != nil {
 			return orchestrator.JudgeConsensusOutput{}, err
 		}
@@ -139,10 +158,11 @@ func (c *Client) JudgeConsensus(ctx context.Context, input orchestrator.JudgeCon
 	return orchestrator.JudgeConsensusOutput{}, errors.New("unreachable consensus parser state")
 }
 
-func (c *Client) callResponses(ctx context.Context, input []inputMsg) (responseBody, error) {
+func (c *Client) callResponses(ctx context.Context, input []inputMsg, maxOutputTokens int) (responseBody, error) {
 	reqBody := responseRequest{
-		Model: c.model,
-		Input: input,
+		Model:           c.model,
+		Input:           input,
+		MaxOutputTokens: maxOutputTokens,
 	}
 
 	payload, err := marshalRequest(reqBody)
@@ -178,11 +198,11 @@ func (c *Client) callResponses(ctx context.Context, input []inputMsg) (responseB
 	return responseBody{}, lastErr
 }
 
-func (c *Client) generatePlainText(ctx context.Context, systemPrompt string, userPrompt string, emptyOutputError string) (string, orchestrator.Usage, error) {
+func (c *Client) generatePlainText(ctx context.Context, systemPrompt string, userPrompt string, emptyOutputError string, maxOutputTokens int) (string, orchestrator.Usage, error) {
 	resp, err := c.callResponses(ctx, []inputMsg{
 		makeMessage("system", systemPrompt),
 		makeMessage("user", userPrompt),
-	})
+	}, maxOutputTokens)
 	if err != nil {
 		return "", orchestrator.Usage{}, err
 	}
@@ -191,5 +211,59 @@ func (c *Client) generatePlainText(ctx context.Context, systemPrompt string, use
 	if text == "" {
 		return "", orchestrator.Usage{}, errors.New(emptyOutputError)
 	}
-	return text, toUsage(resp.Usage), nil
+
+	usage := toUsage(resp.Usage)
+	if looksLikeTruncatedText(text, usage.CompletionTokens, maxOutputTokens) {
+		retryCap := maxOutputTokens * 2
+		if retryCap < maxOutputTokens+120 {
+			retryCap = maxOutputTokens + 120
+		}
+		if retryCap > 1400 {
+			retryCap = 1400
+		}
+		retryPrompt := userPrompt + "\n\nYour previous response was cut off. Rewrite the whole answer from scratch, concise but complete, and end with a complete sentence."
+
+		retryResp, retryErr := c.callResponses(ctx, []inputMsg{
+			makeMessage("system", systemPrompt),
+			makeMessage("user", retryPrompt),
+		}, retryCap)
+		if retryErr == nil {
+			retryText := strings.TrimSpace(extractOutputText(retryResp))
+			if retryText != "" {
+				retryUsage := toUsage(retryResp.Usage)
+				usage.PromptTokens += retryUsage.PromptTokens
+				usage.CompletionTokens += retryUsage.CompletionTokens
+				usage.TotalTokens += retryUsage.TotalTokens
+				text = retryText
+			}
+		}
+	}
+
+	return text, usage, nil
+}
+
+func looksLikeTruncatedText(text string, completionTokens int, maxOutputTokens int) bool {
+	if strings.TrimSpace(text) == "" {
+		return true
+	}
+	if maxOutputTokens <= 0 {
+		return false
+	}
+	if completionTokens < maxOutputTokens-6 {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(text)
+	completeSuffixes := []string{
+		".", "!", "?", "…", "\"", "'", "”", "’",
+		"다.", "요.", "니다.", "했다.", "됩니다.", "한다.", "합니다.", "해요.", "임.", "됨.",
+		"다", "요", "니다", "합니다", "해요", "됨", "임",
+		"}", "]", ")",
+	}
+	for _, suffix := range completeSuffixes {
+		if strings.HasSuffix(trimmed, suffix) {
+			return false
+		}
+	}
+	return true
 }

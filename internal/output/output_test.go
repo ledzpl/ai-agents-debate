@@ -54,22 +54,22 @@ func TestSaveResultWritesJSONAndMarkdown(t *testing.T) {
 	if !strings.Contains(mdText, "## Turns") {
 		t.Fatalf("expected turns section, got %q", mdText)
 	}
-	if !strings.Contains(mdText, "### TOC (by speaker)") {
+	if !strings.Contains(mdText, "### TOC (turn order)") {
 		t.Fatalf("expected turns toc section, got %q", mdText)
 	}
-	if !strings.Contains(mdText, "[A](#turns-speaker-1)") || !strings.Contains(mdText, "[사회자](#turns-speaker-2)") {
-		t.Fatalf("expected speaker toc anchors, got %q", mdText)
+	if !strings.Contains(mdText, "[Turn 1 · A (persona)](#turn-1)") || !strings.Contains(mdText, "[Turn 2 · 사회자 (moderator)](#turn-2)") {
+		t.Fatalf("expected turn-order toc anchors, got %q", mdText)
 	}
 	if !strings.Contains(mdText, "<a id=\"turns-speaker-1\"></a>") || !strings.Contains(mdText, "<a id=\"turns-speaker-2\"></a>") {
 		t.Fatalf("expected explicit speaker anchors, got %q", mdText)
 	}
-	if !strings.Contains(mdText, "<details>") || !strings.Contains(mdText, "</details>") {
+	if !strings.Contains(mdText, "<details open>") || !strings.Contains(mdText, "</details>") {
 		t.Fatalf("expected collapsible details blocks, got %q", mdText)
 	}
 	if !strings.Contains(mdText, "- test problem") || !strings.Contains(mdText, "- second line") {
 		t.Fatalf("expected bulleted problem lines, got %q", mdText)
 	}
-	if !strings.Contains(mdText, "#### Turn 1 (persona)") || !strings.Contains(mdText, "#### Turn 2 (moderator)") {
+	if !strings.Contains(mdText, "#### Turn 1 · A (persona)") || !strings.Contains(mdText, "#### Turn 2 · 사회자 (moderator)") {
 		t.Fatalf("expected per-turn headers in speaker groups, got %q", mdText)
 	}
 	if !strings.Contains(mdText, "- content:\n  - first point\n  - second point") {
@@ -91,6 +91,16 @@ func TestSaveResultWritesJSONAndMarkdown(t *testing.T) {
 	if _, err := os.Stat(mdPath + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("expected no markdown temp file left, got err=%v", err)
 	}
+	if leftovers, err := filepath.Glob(path + ".tmp-*"); err != nil {
+		t.Fatalf("glob json leftovers: %v", err)
+	} else if len(leftovers) > 0 {
+		t.Fatalf("expected no random json temp leftovers, got %v", leftovers)
+	}
+	if leftovers, err := filepath.Glob(mdPath + ".tmp-*"); err != nil {
+		t.Fatalf("glob markdown leftovers: %v", err)
+	} else if len(leftovers) > 0 {
+		t.Fatalf("expected no random markdown temp leftovers, got %v", leftovers)
+	}
 }
 
 func TestNewTimestampPath(t *testing.T) {
@@ -107,5 +117,24 @@ func TestMarkdownPath(t *testing.T) {
 	}
 	if got := MarkdownPath("./outputs/result"); got != "./outputs/result.md" {
 		t.Fatalf("unexpected markdown path without extension: %s", got)
+	}
+}
+
+func TestGroupTurnsBySpeakerUsesSpeakerIDKey(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{Index: 1, SpeakerID: "p1", SpeakerName: "Alex", Type: orchestrator.TurnTypePersona, Content: "a"},
+		{Index: 2, SpeakerID: "p2", SpeakerName: "Alex", Type: orchestrator.TurnTypePersona, Content: "b"},
+		{Index: 3, SpeakerID: "p1", SpeakerName: "Alex", Type: orchestrator.TurnTypePersona, Content: "c"},
+	}
+
+	groups := groupTurnsBySpeaker(turns)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups for same-name different-id speakers, got %d", len(groups))
+	}
+	if len(groups[0].Turns) != 2 {
+		t.Fatalf("expected first speaker turns grouped by id, got %d", len(groups[0].Turns))
+	}
+	if len(groups[1].Turns) != 1 {
+		t.Fatalf("expected second speaker turns grouped by id, got %d", len(groups[1].Turns))
 	}
 }

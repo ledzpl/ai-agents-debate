@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"debate/internal/orchestrator"
 	"debate/internal/persona"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type fakeRunner struct {
@@ -428,6 +430,72 @@ func TestBuildPersonaPanelCompactsWhenTooManyPersonas(t *testing.T) {
 	}
 }
 
+func TestBuildPersonaPanelNarrowWidthDoesNotWrap(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = []persona.Persona{
+		{ID: "p1", Name: "Alpha Persona With Long Name", Role: "very-long-role-name", MasterName: "Very Long Master Name"},
+		{ID: "p2", Name: "Beta Persona With Long Name", Role: "another-very-long-role-name"},
+	}
+
+	width := 18
+	maxLines := 4
+	panel := m.buildPersonaPanel(width, maxLines)
+	lines := strings.Split(panel, "\n")
+	if len(lines) > maxLines {
+		t.Fatalf("expected at most %d lines, got %d: %q", maxLines, len(lines), panel)
+	}
+	for _, line := range lines {
+		if lipgloss.Width(line) > width {
+			t.Fatalf("expected no wrapped/overflow line (width=%d), got line=%q (w=%d)", width, line, lipgloss.Width(line))
+		}
+	}
+}
+
+func TestBuildPersonaPanelNormalizesMultilineFields(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = []persona.Persona{
+		{
+			ID:            "p1",
+			Name:          "Alpha\nPersona",
+			MasterName:    "Very\nLong Master",
+			Role:          "very-long-role\nwith-wrap-risk",
+			Stance:        "neutral",
+			SignatureLens: []string{"lens line 1\nlens line 2"},
+		},
+		{ID: "p2", Name: "Beta Persona", Role: "ops"},
+	}
+
+	width := 24
+	maxLines := 6
+	panel := m.buildPersonaPanel(width, maxLines)
+	lines := strings.Split(panel, "\n")
+	if len(lines) > maxLines {
+		t.Fatalf("expected at most %d lines, got %d: %q", maxLines, len(lines), panel)
+	}
+	for _, line := range lines {
+		if strings.ContainsAny(line, "\r\n\t") {
+			t.Fatalf("expected sanitized single-line text, got %q", line)
+		}
+		if lipgloss.Width(line) > width {
+			t.Fatalf("expected width <= %d, got line=%q (w=%d)", width, line, lipgloss.Width(line))
+		}
+	}
+}
+
 func TestBuildPersonaPanelRespectsSingleLineLimit(t *testing.T) {
 	m := newModel(context.Background(), modelConfig{
 		PersonaPath: "./personas.json",
@@ -519,4 +587,102 @@ func containsLinePrefix(lines []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+func TestViewDoesNotOverflowWindow(t *testing.T) {
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = []persona.Persona{
+		{ID: "p1", Name: "Alpha", Role: "growth"},
+		{ID: "p2", Name: "Beta", Role: "risk"},
+		{ID: "p3", Name: "Gamma", Role: "data"},
+		{ID: "p4", Name: "Delta", Role: "ops"},
+	}
+	for i := 0; i < 120; i++ {
+		m.appendLog("this is a sample long log line for wrapping and viewport checks")
+	}
+
+	sizes := []struct {
+		w int
+		h int
+	}{
+		{w: 76, h: 18},
+		{w: 80, h: 24},
+		{w: 100, h: 30},
+		{w: 120, h: 36},
+		{w: 68, h: 20},
+		{w: 52, h: 16},
+	}
+
+	for _, size := range sizes {
+		m.width = size.w
+		m.height = size.h
+		m.resizeLayout()
+
+		view := m.View()
+		if h := lipgloss.Height(view); h > size.h {
+			t.Fatalf("rendered height overflow for %dx%d: got %d", size.w, size.h, h)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if w := lipgloss.Width(line); w > size.w {
+				t.Fatalf("rendered width overflow for %dx%d: got %d, line=%q", size.w, size.h, w, line)
+			}
+		}
+	}
+}
+
+func TestPersonaPanelHeightStableWithIdeasPreset(t *testing.T) {
+	personas, err := persona.LoadFromFile(filepath.Join("..", "..", "exmaples", "personas.ideas.json"))
+	if err != nil {
+		t.Fatalf("load personas preset: %v", err)
+	}
+
+	m := newModel(context.Background(), modelConfig{
+		PersonaPath: "./personas.json",
+		OutputDir:   "./outputs",
+		MaxTurns:    8,
+		Runner:      &fakeRunner{},
+		Loader:      persona.LoadFromFile,
+		Now:         time.Now,
+	})
+	m.personas = personas
+	m.width = 150
+	m.height = 60
+
+	contentWidth := maxInt(1, m.width-viewChromeStyle.GetHorizontalFrameSize())
+	hero := m.renderHero(contentWidth)
+	commands := m.renderCommandRibbon(contentWidth)
+	footer := m.renderFooter(contentWidth)
+	availableBodyH := m.height - viewChromeStyle.GetVerticalFrameSize() - lipgloss.Height(hero) - lipgloss.Height(commands) - lipgloss.Height(footer)
+	minStandardBodyOuterH := maxInt(6, viewPanelStyle.GetVerticalFrameSize()+4)
+	if availableBodyH < minStandardBodyOuterH {
+		t.Fatalf("unexpected compact mode in test setup: availableBodyH=%d", availableBodyH)
+	}
+
+	leftOuterW := minInt(48, maxInt(32, contentWidth/3))
+	panelOuterH := maxInt(minStandardBodyOuterH, availableBodyH)
+	panelBoxLeftW := styleBoxWidth(viewPanelStyle, leftOuterW)
+	panelTextLeftW := styleTextWidth(viewPanelStyle, leftOuterW)
+	panelBoxH := styleBoxHeight(viewPanelStyle, panelOuterH)
+	panelTextH := styleTextHeight(viewPanelStyle, panelOuterH)
+	leftHeader := m.renderPanelHeader("PERSONAS", "loaded", maxInt(12, panelTextLeftW))
+	leftBodyH := maxInt(1, panelTextH-lipgloss.Height(leftHeader))
+
+	body := m.buildPersonaPanel(maxInt(12, panelTextLeftW), maxInt(1, leftBodyH))
+	panel := viewPanelStyle.Width(panelBoxLeftW).Height(panelBoxH).Render(lipgloss.JoinVertical(lipgloss.Left, leftHeader, body))
+	if got := lipgloss.Height(panel); got != panelOuterH {
+		t.Fatalf("persona panel height expanded unexpectedly: got=%d want=%d", got, panelOuterH)
+	}
+
+	for _, line := range strings.Split(body, "\n") {
+		if lipgloss.Width(line) > panelTextLeftW {
+			t.Fatalf("persona line overflow: w=%d limit=%d line=%q", lipgloss.Width(line), panelTextLeftW, line)
+		}
+	}
 }

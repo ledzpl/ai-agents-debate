@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"debate/internal/persona"
+	"github.com/mattn/go-runewidth"
 )
 
 func (m *model) buildPersonaPanel(width int, maxLines int) string {
@@ -34,15 +35,15 @@ func (m *model) buildPersonaPanel(width int, maxLines int) string {
 
 		turns := m.speakerTurns[p.ID]
 		block := []string{
-			fmt.Sprintf("%s %2d) %s [%dT] %s", marker, i+1, truncateText(displayName, nameWidth), turns, miniMeter(turns, maxTurns, 4)),
-			fmt.Sprintf("    %s", truncateText("role: "+p.Role+" | stance: "+p.Stance, metaWidth)),
+			fitPanelLine(fmt.Sprintf("%s %2d) %s [%dT] %s", marker, i+1, truncateText(displayName, nameWidth), turns, miniMeter(turns, maxTurns, 4)), width),
+			fitPanelLine(fmt.Sprintf("    %s", truncateText("role: "+p.Role+" | stance: "+p.Stance, metaWidth)), width),
 		}
 
 		if strings.TrimSpace(p.MasterName) != "" {
-			block = append(block, "    "+truncateText("master: "+p.MasterName, metaWidth))
+			block = append(block, fitPanelLine("    "+truncateText("master: "+p.MasterName, metaWidth), width))
 		}
 		if len(p.SignatureLens) > 0 {
-			block = append(block, "    "+truncateText("lens: "+p.SignatureLens[0], lensWidth))
+			block = append(block, fitPanelLine("    "+truncateText("lens: "+p.SignatureLens[0], lensWidth), width))
 		}
 		block = append(block, "")
 
@@ -107,7 +108,8 @@ func (m model) buildCompactPersonaPanel(width int, maxLines int) string {
 			marker = ">"
 		}
 		turns := m.speakerTurns[p.ID]
-		lines = append(lines, fmt.Sprintf("%s %2d) %s [%dT] %s", marker, i+1, truncateText(displayName, nameWidth), turns, miniMeter(turns, maxTurns, 3)))
+		line := fmt.Sprintf("%s %2d) %s [%dT] %s", marker, i+1, truncateText(displayName, nameWidth), turns, miniMeter(turns, maxTurns, 3))
+		lines = append(lines, fitPanelLine(line, width))
 	}
 	if overflow {
 		lines = appendOverflowLine(lines, fmt.Sprintf("... +%d more personas", len(m.personas)-visible), maxLines, width)
@@ -116,7 +118,7 @@ func (m model) buildCompactPersonaPanel(width int, maxLines int) string {
 }
 
 func appendOverflowLine(lines []string, line string, maxLines int, width int) []string {
-	line = truncateText(line, maxInt(12, width))
+	line = fitPanelLine(line, maxInt(12, width))
 	if maxLines <= 0 {
 		return lines
 	}
@@ -128,6 +130,28 @@ func appendOverflowLine(lines []string, line string, maxLines int, width int) []
 	}
 	lines[maxLines-1] = line
 	return lines
+}
+
+func fitPanelLine(line string, width int) string {
+	line = normalizeSingleLine(line)
+	if width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(line) <= width {
+		return line
+	}
+	if width == 1 {
+		return "…"
+	}
+	return runewidth.Truncate(line, width, "…")
+}
+
+func normalizeSingleLine(line string) string {
+	line = strings.ReplaceAll(line, "\r\n", " ")
+	line = strings.ReplaceAll(line, "\n", " ")
+	line = strings.ReplaceAll(line, "\r", " ")
+	line = strings.ReplaceAll(line, "\t", " ")
+	return line
 }
 
 func maxSpeakerTurns(turns map[string]int) int {

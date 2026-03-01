@@ -13,6 +13,7 @@ import (
 	"debate/internal/orchestrator"
 	"debate/internal/output"
 	"debate/internal/persona"
+	"debate/internal/turnfmt"
 )
 
 type Runner interface {
@@ -233,35 +234,23 @@ func parseCommand(line string) (command string, arg string) {
 }
 
 func formatTurnLines(turn orchestrator.Turn) []string {
-	label := turn.SpeakerName
-	if turn.Type == orchestrator.TurnTypeModerator {
-		label = "사회자"
-	}
-
-	separator := strings.Repeat("-", 52)
-	if turn.Type == orchestrator.TurnTypeModerator {
-		separator = strings.Repeat("=", 52)
-	}
-
-	header := fmt.Sprintf("---- turn %d | %s ----", turn.Index, label)
-	lines := []string{"", separator, header}
-
-	contentLines := strings.Split(strings.TrimSpace(turn.Content), "\n")
-	appended := false
-	for _, line := range contentLines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		lines = append(lines, "  "+trimmed)
-		appended = true
-	}
-	if !appended {
-		lines = append(lines, "  (empty)")
-	}
-	lines = append(lines, separator, "")
-
-	return lines
+	return turnfmt.FormatLines(turn, turnfmt.Options{
+		Header: func(t orchestrator.Turn) string {
+			label := t.SpeakerName
+			if t.Type == orchestrator.TurnTypeModerator {
+				label = "사회자"
+			}
+			return fmt.Sprintf("---- turn %d | %s ----", t.Index, label)
+		},
+		Separator: func(t orchestrator.Turn) string {
+			if t.Type == orchestrator.TurnTypeModerator {
+				return strings.Repeat("=", 52)
+			}
+			return strings.Repeat("-", 52)
+		},
+		ContentPrefix:  "  ",
+		KeepBlankLines: false,
+	})
 }
 
 func (a *App) printHelp() {

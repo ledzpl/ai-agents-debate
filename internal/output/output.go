@@ -15,7 +15,12 @@ import (
 type turnSpeakerGroup struct {
 	Speaker string
 	Anchor  string
-	Turns   []orchestrator.Turn
+	Turns   []turnItem
+}
+
+type turnItem struct {
+	Seq  int
+	Turn orchestrator.Turn
 }
 
 func SaveResult(path string, result orchestrator.Result) error {
@@ -49,9 +54,29 @@ func MarkdownPath(path string) string {
 }
 
 func writeAtomic(path string, data []byte, perm os.FileMode) error {
-	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, data, perm); err != nil {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tempFile, err := os.CreateTemp(dir, base+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	cleanup := func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}
+
+	if err := tempFile.Chmod(perm); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tempFile.Write(data); err != nil {
+		cleanup()
 		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
 		_ = os.Remove(tempPath)
@@ -172,27 +197,30 @@ func formatTurnsBySpeaker(turns []orchestrator.Turn) string {
 	groups := groupTurnsBySpeaker(turns)
 	var b strings.Builder
 
-	b.WriteString("### TOC (by speaker)\n\n")
-	for _, group := range groups {
-		b.WriteString(fmt.Sprintf("- [%s](#%s) (%d %s)\n",
-			safeText(group.Speaker),
-			group.Anchor,
-			len(group.Turns),
-			turnWord(len(group.Turns)),
+	b.WriteString("### TOC (turn order)\n\n")
+	for i, turn := range turns {
+		seq := i + 1
+		b.WriteString(fmt.Sprintf("- [Turn %d · %s (%s)](#%s)\n",
+			turn.Index,
+			safeText(displaySpeaker(turn)),
+			safeText(turn.Type),
+			turnAnchor(seq),
 		))
 	}
 
 	for i, group := range groups {
 		b.WriteString(fmt.Sprintf("\n<a id=\"%s\"></a>\n", group.Anchor))
-		b.WriteString("<details>\n")
+		b.WriteString("<details open>\n")
 		b.WriteString(fmt.Sprintf("<summary><strong>%s</strong> · %d %s</summary>\n\n",
 			safeText(group.Speaker),
 			len(group.Turns),
 			turnWord(len(group.Turns)),
 		))
 
-		for _, t := range group.Turns {
-			header := fmt.Sprintf("#### Turn %d (%s)", t.Index, safeText(t.Type))
+		for _, item := range group.Turns {
+			t := item.Turn
+			b.WriteString(fmt.Sprintf("<a id=\"%s\"></a>\n", turnAnchor(item.Seq)))
+			header := fmt.Sprintf("#### Turn %d · %s (%s)", t.Index, safeText(displaySpeaker(t)), safeText(t.Type))
 			b.WriteString(header + "\n\n")
 			if !t.Timestamp.IsZero() {
 				b.WriteString("- timestamp: " + t.Timestamp.UTC().Format(time.RFC3339) + "\n")
@@ -213,16 +241,10 @@ func groupTurnsBySpeaker(turns []orchestrator.Turn) []turnSpeakerGroup {
 	groups := make([]turnSpeakerGroup, 0, len(turns))
 	indexByKey := make(map[string]int, len(turns))
 
-	for _, turn := range turns {
-		speaker := strings.TrimSpace(turn.SpeakerName)
-		if speaker == "" {
-			speaker = strings.TrimSpace(turn.SpeakerID)
-		}
-		if speaker == "" {
-			speaker = "Unknown Speaker"
-		}
+	for seq, turn := range turns {
+		speaker := displaySpeaker(turn)
 
-		key := strings.ToLower(speaker)
+		key := speakerGroupKey(turn, speaker)
 		idx, ok := indexByKey[key]
 		if !ok {
 			idx = len(groups)
@@ -232,10 +254,36 @@ func groupTurnsBySpeaker(turns []orchestrator.Turn) []turnSpeakerGroup {
 				Anchor:  fmt.Sprintf("turns-speaker-%d", idx+1),
 			})
 		}
-		groups[idx].Turns = append(groups[idx].Turns, turn)
+		groups[idx].Turns = append(groups[idx].Turns, turnItem{Seq: seq + 1, Turn: turn})
 	}
 
 	return groups
+}
+
+func speakerGroupKey(turn orchestrator.Turn, speaker string) string {
+	id := strings.TrimSpace(turn.SpeakerID)
+	if id != "" {
+		return strings.ToLower(turn.Type + "|" + id)
+	}
+	return strings.ToLower(turn.Type + "|" + speaker)
+}
+
+func displaySpeaker(turn orchestrator.Turn) string {
+	speaker := strings.TrimSpace(turn.SpeakerName)
+	if speaker == "" {
+		speaker = strings.TrimSpace(turn.SpeakerID)
+	}
+	if speaker == "" {
+		return "Unknown Speaker"
+	}
+	return speaker
+}
+
+func turnAnchor(seq int) string {
+	if seq < 1 {
+		seq = 1
+	}
+	return fmt.Sprintf("turn-%d", seq)
 }
 
 func turnWord(n int) string {

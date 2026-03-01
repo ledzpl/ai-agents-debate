@@ -39,3 +39,20 @@ func TestParseConsensusMissingRationale(t *testing.T) {
 		t.Fatal("expected missing rationale error")
 	}
 }
+
+func TestParseConsensusPicksFirstBalancedJSONObject(t *testing.T) {
+	raw := `prefix {"reached":true,"score":0.91,"summary":"ok","rationale":"uses {brace} in text"} trailing {"ignored":true}`
+	consensus, err := parseConsensus(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !consensus.Reached {
+		t.Fatal("expected reached=true")
+	}
+	if consensus.Score != 0.91 {
+		t.Fatalf("unexpected score: %v", consensus.Score)
+	}
+	if consensus.Summary != "ok" {
+		t.Fatalf("unexpected summary: %s", consensus.Summary)
+	}
+}

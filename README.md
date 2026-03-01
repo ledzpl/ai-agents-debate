@@ -6,9 +6,11 @@ Bubble Tea 기반 TUI/REPL 앱으로 OpenAI Responses API를 사용해 멀티 �
 
 - 멀티 페르소나 순환 토론 + 사회자 개입 + 합의 판정
 - TUI(터미널 인터랙티브) / REPL(비대화형 환경 fallback) 자동 전환
-- `master_name` 기반 롤모델 지식 반영 프롬프트
+- `name`/`master_name` 분리 스키마 지원
+- `master_name` 기반 롤모델 지식/저술/프레임워크 반영 프롬프트
 - 토론 결과 JSON + Markdown 자동 저장 (`./outputs`)
-- persona 수가 많아도 패널이 compact/overflow-safe로 렌더링
+- Markdown 결과에 turn 순서 TOC + 화자별 접기(`<details>`) 렌더링
+- 좁은 터미널/많은 persona에서도 overflow-safe 레이아웃
 
 ## 요구 사항
 
@@ -22,7 +24,7 @@ export OPENAI_API_KEY="<your-key>"
 go run ./cmd/debate
 ```
 
-persona 파일을 실행 시 지정하려면:
+persona 파일 경로를 실행 시 지정:
 
 ```bash
 go run ./cmd/debate --personas ./exmaples/personas.pm.json
@@ -30,7 +32,7 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json
 
 `--persona`는 `--personas`의 alias입니다.
 
-기본 로딩 경로:
+기본 경로:
 
 - persona 파일: `./personas.json`
 - 결과 저장: `./outputs`
@@ -55,14 +57,14 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json
 | `DEBATE_MAX_TOTAL_TOKENS` | `120000` | 최대 누적 토큰 (`> 0`) |
 | `DEBATE_MAX_NO_PROGRESS_JUDGE` | `6` | 합의 점수 정체 허용 횟수 (`> 0`) |
 | `OPENAI_REQUEST_TIMEOUT` | `60s` | API 요청 타임아웃 |
-| `OPENAI_API_MAX_RETRIES` | `2` | 재시도 횟수 (`>= 0`) |
+| `OPENAI_API_MAX_RETRIES` | `2` | API 재시도 횟수 (`>= 0`) |
 
 ## 토론 동작
 
 1. persona가 순환하면서 발언
 2. persona 발언 사이마다 사회자가 요약/질문으로 개입
-3. 주기적으로 합의 점수 판정
-4. `consensus_reached`는 단일 판정이 아니라 연속 합의 판정 확인 후 종료
+3. 라운드 단위로 합의 점수 판정
+4. `consensus_reached`는 단일 판정이 아니라 연속 확인 후 종료
 5. 종료 시 마지막은 항상 사회자 최종 정리 턴
 
 ### 종료 상태
@@ -92,7 +94,7 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json
 - `/stop` 실행 중 토론 중지
 - `/follow [on|off|toggle]` auto-follow 제어
 - `/show` 로드된 persona 출력
-- `/load` `personas.json` 재로드
+- `/load` 현재 persona 경로 재로드
 - `/help` 도움말
 - `/exit` 종료
 
@@ -118,12 +120,17 @@ REPL 지원 명령:
 
 ## 결과 파일
 
-- 각 토론 결과는 아래 2개 파일로 저장됩니다.
-  - `./outputs/*-debate.json`
-  - `./outputs/*-debate.md` (읽기 좋은 포맷)
-- JSON에는 problem/personas/turns/consensus/status/metrics/timestamps가 포함됩니다.
-- Markdown에는 problem/consensus/personas/turns/metrics가 섹션 + 불릿 목록 형태로 정리됩니다.
-- `## Turns`는 화자별 TOC 링크와 접기(`<details>`) 섹션으로 렌더링됩니다.
+각 토론 결과는 아래 2개 파일로 저장됩니다.
+
+- `./outputs/*-debate.json`
+- `./outputs/*-debate.md`
+
+JSON에는 `problem/personas/turns/consensus/status/metrics/timestamps`가 포함됩니다.
+
+Markdown에는 `problem/consensus/personas/turns/metrics`가 읽기 좋은 형태로 정리됩니다.
+
+- `## Turns`에 Turn 순서 TOC 링크 포함
+- 화자별 묶음은 `<details open>`으로 접기/펼치기 가능
 
 ## persona 스키마
 
@@ -151,7 +158,7 @@ REPL 지원 명령:
 - `id`, `name`, `role` 필수
 - `id`는 unique
 - `stance` 미입력 시 `neutral`
-- `expertise` / `signature_lens` / `constraints`는 빈값 trim 후 정규화
+- `expertise` / `signature_lens` / `constraints`는 trim 후 빈값 제거
 
 `name` 과 `master_name`:
 
@@ -159,18 +166,25 @@ REPL 지원 명령:
 - `master_name`: 참고 롤모델 이름(선택)
 - UI/프롬프트에서는 필요 시 `name (master_name)` 형태로 표시
 
-`master_name`가 있으면 프롬프트가 해당 인물의 공개 지식/저술/논문/아티클 관점을 반영하도록 강화됩니다.  
+`master_name`가 있으면 해당 인물의 알려진 지식/저술/논문/아티클 관점을 프롬프트에 반영합니다.
 실존 인물 사칭은 금지되며, 불확실한 서지정보를 지어내지 않도록 가드레일이 포함됩니다.
+
+## 프롬프트 설계 메모
+
+- 사회자 프롬프트는 최신 발화 편향(recency bias) 완화를 위해 메모리 스냅샷을 우선 참조
+- 토론이 길어지거나 persona 수가 많아지면 프롬프트 로그 길이/요약 길이를 동적으로 축소해 토큰 사용량을 제어
+- 합의 판정은 엄격한 JSON 포맷(`reached/score/summary/rationale`)을 강제
 
 ## 샘플 persona 세트
 
-샘플 파일은 `./exmaples` 디렉터리에 있습니다.  
+샘플 파일은 `./exmaples` 디렉터리에 있습니다.
 참고: 디렉터리명은 현재 코드 기준으로 `exmaples`입니다.
 
 - `personas.brainstorming.json`
 - `personas.company.json`
 - `personas.friend.json`
 - `personas.ideas.json`
+- `personas.music.json`
 - `personas.pm.json`
 
 사용 예시:

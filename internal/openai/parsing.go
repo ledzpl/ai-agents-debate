@@ -102,12 +102,48 @@ func stripCodeFence(s string) string {
 }
 
 func extractJSONObject(s string) string {
-	start := strings.IndexByte(s, '{')
-	end := strings.LastIndexByte(s, '}')
-	if start == -1 || end == -1 || end < start {
-		return ""
+	start := -1
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				return s[start : i+1]
+			}
+		}
 	}
-	return s[start : end+1]
+	return ""
 }
 
 func clamp(v, min, max float64) float64 {
