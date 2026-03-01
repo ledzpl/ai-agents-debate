@@ -82,7 +82,8 @@ Rules:
 - Keep the debate interactive: explicitly connect to one named speaker's prior claim (agree, refine, or challenge).
 - If a moderator question/request is provided, answer it in your first sentence before expanding.
 - When possible, address one strongest counterpoint from another speaker.
-- Include one steelman sentence for an opposing view before your main rebuttal.
+- Before your main rebuttal, include one fair strongest-form summary of an opposing view.
+- Do this implicitly; never use meta labels like "steelman" or mention prompt techniques.
 - Add one new delta in each turn (new evidence, boundary condition, metric, dependency, or failure mode), not just restatement.
 - If you disagree, state which assumption differs and what evidence would falsify your position.
 - If you mostly agree, push toward convergence with a concrete decision criterion or next step.
@@ -220,7 +221,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 		b.WriteString("- respond to one concrete prior claim by speaker name and include at least one [turn-index] citation.\n")
 		b.WriteString("- resolve or sharpen one active tension with a condition/metric.\n")
 		b.WriteString("- contribute one new insight, not a restatement of your last claim.\n")
-		b.WriteString("- include one steelman of an opposing view before your rebuttal.\n")
+		b.WriteString("- before your rebuttal, briefly summarize the strongest opposing view fairly (without meta labels like 'steelman').\n")
 	}
 	b.WriteString("- do not repeat your last two-turn claims unless assumptions changed or evidence is new.\n")
 	b.WriteString("- include a decision-forcing handoff question for the next speaker.\n")

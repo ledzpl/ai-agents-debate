@@ -127,8 +127,11 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "answer it in your first sentence") {
 		t.Fatalf("expected moderator-question-first guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "steelman sentence") {
-		t.Fatalf("expected steelman guidance, prompt=%q", prompt)
+	if !strings.Contains(prompt, "strongest-form summary of an opposing view") {
+		t.Fatalf("expected fair opposing-view summary guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "never use meta labels like \"steelman\"") {
+		t.Fatalf("expected no-meta-term guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "last two turns") {
 		t.Fatalf("expected repeat guardrail for two-turn window, prompt=%q", prompt)
