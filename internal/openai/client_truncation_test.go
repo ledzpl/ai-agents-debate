@@ -39,6 +39,13 @@ func TestLooksLikeTruncatedText(t *testing.T) {
 			want:             false,
 		},
 		{
+			name:             "near cap but completes directive no",
+			text:             "CLOSE: no",
+			completionTokens: 320,
+			maxOutputTokens:  320,
+			want:             false,
+		},
+		{
 			name:             "empty text",
 			text:             "   ",
 			completionTokens: 320,

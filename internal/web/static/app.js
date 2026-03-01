@@ -22,11 +22,12 @@
 
     let personaGroups = [];
     let selectedPersonaPath = "";
-    let currentRunID = "";
-    let currentStream = null;
-    let turnCount = 0;
-    let stopRequested = false;
-    const maxRenderedTurnCards = 320;
+	    let currentRunID = "";
+	    let currentStream = null;
+	    let turnCount = 0;
+	    let stopRequested = false;
+	    let latestPersonaLoadSeq = 0;
+	    const maxRenderedTurnCards = 320;
 
     function closeCurrentStream() {
       if (!currentStream) return;
@@ -134,7 +135,7 @@
       }
       while (lines.length > 0) {
         const tail = lines[lines.length - 1].trim();
-        if (/^next\s*[:=]/i.test(tail) || /^close\s*[:=]/i.test(tail) || /^new[_-]?point\s*[:=]/i.test(tail)) {
+        if (/^handoff_ask\s*[:=]/i.test(tail) || /^next\s*[:=]/i.test(tail) || /^close\s*[:=]/i.test(tail) || /^new[_-]?point\s*[:=]/i.test(tail)) {
           lines.pop();
           continue;
         }
@@ -338,12 +339,29 @@
       debateWindowEl.scrollTop = debateWindowEl.scrollHeight;
     }
 
-    function clearDebateWindow() {
-      debateWindowEl.innerHTML = "";
-      turnCount = 0;
-      setTurnMeta(0, "대기");
-      clearActivePersona();
-    }
+	    function clearDebateWindow() {
+	      debateWindowEl.innerHTML = "";
+	      turnCount = 0;
+	      setTurnMeta(0, "대기");
+	      clearActivePersona();
+	    }
+
+	    function finalizeRunState(statusValue, turnState, errorMessage, stopNotice) {
+	      if (typeof errorMessage === "string") {
+	        errorText.textContent = errorMessage;
+	      }
+	      clearActivePersona();
+	      statusText.textContent = statusValue;
+	      setTurnMeta(turnCount, turnState);
+	      setDebateRunning(false);
+	      hideProgress();
+	      closeCurrentStream();
+	      currentRunID = "";
+	      stopRequested = false;
+	      if (stopNotice) {
+	        appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
+	      }
+	    }
 
     function applyPersonaPayload(payload, path) {
       selectedPersonaPath = payload.path || path || "";
@@ -351,25 +369,33 @@
       renderPersonaList(payload.personas);
     }
 
-    async function loadPersonasBySelectedGroup() {
-      const path = personaGroupEl.value.trim();
-      const payload = await fetchPersonas(path);
-      applyPersonaPayload(payload, path);
-    }
+	    async function loadPersonasBySelectedGroup() {
+	      const path = personaGroupEl.value.trim();
+	      const seq = ++latestPersonaLoadSeq;
+	      const payload = await fetchPersonas(path);
+	      if (seq !== latestPersonaLoadSeq) {
+	        return;
+	      }
+	      applyPersonaPayload(payload, path);
+	    }
 
-    async function initPersonas() {
-      const payload = await fetchPersonas("");
-      const defaultPath = payload.path || "";
-      buildPersonaGroups(defaultPath);
-      personaGroupEl.value = defaultPath;
-      applyPersonaPayload(payload, defaultPath);
-    }
+	    async function initPersonas() {
+	      const seq = ++latestPersonaLoadSeq;
+	      const payload = await fetchPersonas("");
+	      if (seq !== latestPersonaLoadSeq) {
+	        return;
+	      }
+	      const defaultPath = payload.path || "";
+	      buildPersonaGroups(defaultPath);
+	      personaGroupEl.value = defaultPath;
+	      applyPersonaPayload(payload, defaultPath);
+	    }
 
 
-    async function runDebate() {
-      errorText.textContent = "";
-      statusText.textContent = "토론 실행 중...";
-      setDebateRunning(true);
+	    async function runDebate() {
+	      errorText.textContent = "";
+	      statusText.textContent = "토론 실행 중...";
+	      setDebateRunning(true);
       stopRequested = false;
       showProgress("토론을 시작하는 중...");
       closeCurrentStream();
@@ -383,17 +409,21 @@
         const problem = problemEl.value.trim();
         if (!problem) throw new Error("토론 주제를 입력해 주세요.");
 
-        const startPayload = await createDebateRun(problem);
-        currentRunID = String(startPayload.run_id);
+	        const startPayload = await createDebateRun(problem);
+	        currentRunID = String(startPayload.run_id);
 
-        const stream = new EventSource("/api/debate/stream?run_id=" + encodeURIComponent(currentRunID));
-        currentStream = stream;
-        let finished = false;
+	        const stream = new EventSource("/api/debate/stream?run_id=" + encodeURIComponent(currentRunID));
+	        currentStream = stream;
+	        const streamRunID = currentRunID;
+	        let finished = false;
+	        function isStaleStream() {
+	          return currentStream !== stream || currentRunID !== streamRunID;
+	        }
 
-        stream.addEventListener("start", function (ev) {
-          if (finished) {
-            return;
-          }
+	        stream.addEventListener("start", function (ev) {
+	          if (finished || isStaleStream()) {
+	            return;
+	          }
           const payload = parseJSON(ev.data) || {};
           clearDebateWindow();
           setTurnMeta(0, "진행 중");
@@ -406,10 +436,10 @@
           );
         });
 
-        stream.addEventListener("turn", function (ev) {
-          if (finished) {
-            return;
-          }
+	        stream.addEventListener("turn", function (ev) {
+	          if (finished || isStaleStream()) {
+	            return;
+	          }
           const turn = parseJSON(ev.data);
           if (!turn) {
             return;
@@ -432,103 +462,69 @@
           );
         });
 
-        stream.addEventListener("complete", function (ev) {
-          if (finished) {
-            return;
-          }
-          finished = true;
+	        stream.addEventListener("complete", function (ev) {
+	          if (finished || isStaleStream()) {
+	            return;
+	          }
+	          finished = true;
           const payload = parseJSON(ev.data) || {};
           const result = payload.result || {};
           const consensus = result.consensus || {};
-          appendTurnCard(
-            "turn-summary",
+          const openRisks = Array.isArray(consensus.open_risks) ? consensus.open_risks.filter(Boolean) : [];
+          const riskLine = openRisks.length > 0 ? openRisks.join(", ") : "-";
+	          appendTurnCard(
+	            "turn-summary",
             "SUMMARY",
             "토론 결과",
             "status: " + (result.status || "-") + "\nconsensus_score: " + Number(consensus.score || 0).toFixed(2) +
               "\nsummary: " + (consensus.summary || "-") +
+              "\nopen_risks: " + riskLine +
+              "\nrequired_next_action: " + (consensus.required_next_action || "-") +
               "\nsaved_json: " + (payload.saved_json_path || "-") +
               "\nsaved_markdown: " + (payload.saved_markdown_path || "-")
-          );
-          clearActivePersona();
-          setTurnMeta(turnCount, "완료");
-          statusText.textContent = "완료";
-          setDebateRunning(false);
-          hideProgress();
-          closeCurrentStream();
-          currentRunID = "";
-        });
+	          );
+	          finalizeRunState("완료", "완료", "", false);
+	        });
 
-        stream.addEventListener("debate_error", function (ev) {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          const payload = parseJSON(ev.data) || {};
-          errorText.textContent = payload.error || "토론 실행 실패";
-          statusText.textContent = "실패";
-          clearActivePersona();
-          setTurnMeta(turnCount, "실패");
-          setDebateRunning(false);
-          hideProgress();
-          closeCurrentStream();
-          currentRunID = "";
-        });
+	        stream.addEventListener("debate_error", function (ev) {
+	          if (finished || isStaleStream()) {
+	            return;
+	          }
+	          finished = true;
+	          const payload = parseJSON(ev.data) || {};
+	          finalizeRunState("실패", "실패", payload.error || "토론 실행 실패", false);
+	        });
 
-        stream.addEventListener("stopped", function () {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          errorText.textContent = "";
-          clearActivePersona();
-          statusText.textContent = "중지됨";
-          setTurnMeta(turnCount, "중지");
-          hideProgress();
-          setDebateRunning(false);
-          closeCurrentStream();
-          currentRunID = "";
-          appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
-        });
+	        stream.addEventListener("stopped", function () {
+	          if (finished || isStaleStream()) {
+	            return;
+	          }
+	          finished = true;
+	          finalizeRunState("중지됨", "중지", "", true);
+	        });
 
-        stream.onerror = function () {
-          if (finished) {
-            return;
-          }
-          if (stopRequested) {
-            finished = true;
-            errorText.textContent = "";
-            clearActivePersona();
-            statusText.textContent = "중지됨";
-            setTurnMeta(turnCount, "중지");
-            hideProgress();
-            setDebateRunning(false);
-            closeCurrentStream();
-            currentRunID = "";
-            appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
-            return;
-          }
-          finished = true;
-          if (!errorText.textContent) {
-            errorText.textContent = "스트림 연결이 종료되었습니다.";
-          }
-          statusText.textContent = "실패";
-          clearActivePersona();
-          setTurnMeta(turnCount, "실패");
-          setDebateRunning(false);
-          hideProgress();
-          closeCurrentStream();
-          currentRunID = "";
-        };
-      } catch (err) {
-        errorText.textContent = String(err.message || err);
-        statusText.textContent = "실패";
-        clearActivePersona();
-        setTurnMeta(turnCount, "실패");
-        setDebateRunning(false);
-        hideProgress();
-        currentRunID = "";
-      }
-    }
+	        stream.onerror = function () {
+	          if (finished || isStaleStream()) {
+	            return;
+	          }
+	          if (stopRequested) {
+	            finished = true;
+	            finalizeRunState("중지됨", "중지", "", true);
+	            return;
+	          }
+	          if (stream.readyState === EventSource.CONNECTING) {
+	            statusText.textContent = "재연결 중...";
+	            showProgress("스트림 재연결 중...");
+	            return;
+	          }
+	          finished = true;
+	          const errMsg = errorText.textContent || "스트림 연결이 종료되었습니다.";
+	          finalizeRunState("실패", "실패", errMsg, false);
+	        };
+	      } catch (err) {
+	        finalizeRunState("실패", "실패", String(err.message || err), false);
+	      }
+	    }
 
     async function stopDebate() {
       if (!currentRunID) {

@@ -23,10 +23,12 @@ func TestSaveResultWritesJSONAndMarkdown(t *testing.T) {
 			{Index: 2, SpeakerName: "사회자", Type: orchestrator.TurnTypeModerator, Content: "next question"},
 		},
 		Consensus: orchestrator.Consensus{
-			Reached:   true,
-			Score:     0.91,
-			Summary:   "aligned\nwith constraints",
-			Rationale: "enough evidence",
+			Reached:            true,
+			Score:              0.91,
+			Summary:            "aligned\nwith constraints",
+			Rationale:          "enough evidence",
+			OpenRisks:          []string{"monitor error budget", "confirm rollback trigger"},
+			RequiredNextAction: "SRE assigns rollback trigger owner by EOD",
 		},
 	}
 
@@ -77,6 +79,12 @@ func TestSaveResultWritesJSONAndMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(mdText, "- aligned") || !strings.Contains(mdText, "- with constraints") {
 		t.Fatalf("expected bulleted consensus summary, got %q", mdText)
+	}
+	if !strings.Contains(mdText, "### Open Risks") || !strings.Contains(mdText, "monitor error budget") {
+		t.Fatalf("expected open risks section, got %q", mdText)
+	}
+	if !strings.Contains(mdText, "### Required Next Action") || !strings.Contains(mdText, "rollback trigger owner") {
+		t.Fatalf("expected required next action section, got %q", mdText)
 	}
 	if !strings.Contains(mdText, "---") {
 		t.Fatalf("expected turn separator, got %q", mdText)

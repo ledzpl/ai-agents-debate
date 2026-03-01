@@ -193,13 +193,18 @@ func mentionsAlias(text string, alias string) bool {
 	if strings.Contains(normalizedText, "@"+normalizedAlias) {
 		return true
 	}
-	if containsWithBoundary(normalizedText, normalizedAlias) {
-		return true
-	}
 	for _, suffix := range koreanAddressingSuffixes {
 		if strings.Contains(normalizedText, normalizedAlias+suffix) {
 			return true
 		}
+	}
+	// One- or two-character aliases (for example "a", "x") are too ambiguous in free text.
+	// Require explicit markers (@alias or Korean addressing suffix) for these short aliases.
+	if utf8.RuneCountInString(normalizedAlias) <= 2 {
+		return false
+	}
+	if containsWithBoundary(normalizedText, normalizedAlias) {
+		return true
 	}
 	return false
 }

@@ -38,6 +38,11 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("DEBATE_MAX_DURATION", "15m")
 	t.Setenv("DEBATE_MAX_TOTAL_TOKENS", "32100")
 	t.Setenv("DEBATE_MAX_NO_PROGRESS_JUDGE", "4")
+	t.Setenv("DEBATE_HARD_MAX_TURNS", "450")
+	t.Setenv("DEBATE_DIRECT_JUDGE_EVERY", "3")
+	t.Setenv("DEBATE_LLM_HISTORY_WINDOW", "88")
+	t.Setenv("DEBATE_RUN_TIMEOUT", "25m")
+	t.Setenv("DEBATE_STREAM_TURN_BUFFER", "777")
 	t.Setenv("OPENAI_REQUEST_TIMEOUT", "90s")
 	t.Setenv("OPENAI_API_MAX_RETRIES", "5")
 
@@ -62,6 +67,21 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.MaxNoProgressJudge != 4 {
 		t.Fatalf("unexpected max no progress judge: %d", cfg.MaxNoProgressJudge)
+	}
+	if cfg.HardMaxTurns != 450 {
+		t.Fatalf("unexpected hard max turns: %d", cfg.HardMaxTurns)
+	}
+	if cfg.DirectJudgeEvery != 3 {
+		t.Fatalf("unexpected direct judge every: %d", cfg.DirectJudgeEvery)
+	}
+	if cfg.LLMHistoryWindow != 88 {
+		t.Fatalf("unexpected llm history window: %d", cfg.LLMHistoryWindow)
+	}
+	if cfg.RunTimeout != 25*time.Minute {
+		t.Fatalf("unexpected run timeout: %s", cfg.RunTimeout)
+	}
+	if cfg.StreamTurnBuffer != 777 {
+		t.Fatalf("unexpected stream turn buffer: %d", cfg.StreamTurnBuffer)
 	}
 	if cfg.RequestTimeout != 90*time.Second {
 		t.Fatalf("unexpected request timeout: %s", cfg.RequestTimeout)

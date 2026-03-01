@@ -18,6 +18,11 @@ const (
 	DefaultMaxDuration        = 20 * time.Minute
 	DefaultMaxTotalTokens     = 120000
 	DefaultMaxNoProgressJudge = 6
+	DefaultHardMaxTurns       = 400
+	DefaultDirectJudgeEvery   = 2
+	DefaultLLMHistoryWindow   = 120
+	DefaultRunTimeout         = 30 * time.Minute
+	DefaultStreamTurnBuffer   = 600
 	DefaultRequestTimeout     = 60 * time.Second
 	DefaultAPIMaxRetries      = 2
 )
@@ -31,6 +36,11 @@ type Settings struct {
 	MaxDuration        time.Duration
 	MaxTotalTokens     int
 	MaxNoProgressJudge int
+	HardMaxTurns       int
+	DirectJudgeEvery   int
+	LLMHistoryWindow   int
+	RunTimeout         time.Duration
+	StreamTurnBuffer   int
 	RequestTimeout     time.Duration
 	APIMaxRetries      int
 }
@@ -50,6 +60,11 @@ func FromEnv() (Settings, error) {
 		MaxDuration:        DefaultMaxDuration,
 		MaxTotalTokens:     DefaultMaxTotalTokens,
 		MaxNoProgressJudge: DefaultMaxNoProgressJudge,
+		HardMaxTurns:       DefaultHardMaxTurns,
+		DirectJudgeEvery:   DefaultDirectJudgeEvery,
+		LLMHistoryWindow:   DefaultLLMHistoryWindow,
+		RunTimeout:         DefaultRunTimeout,
+		StreamTurnBuffer:   DefaultStreamTurnBuffer,
 		RequestTimeout:     DefaultRequestTimeout,
 		APIMaxRetries:      DefaultAPIMaxRetries,
 	}
@@ -76,6 +91,26 @@ func FromEnv() (Settings, error) {
 		return Settings{}, err
 	}
 	settings.MaxNoProgressJudge, err = parseOptionalInt("DEBATE_MAX_NO_PROGRESS_JUDGE", settings.MaxNoProgressJudge, func(v int) bool { return v > 0 })
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.HardMaxTurns, err = parseOptionalInt("DEBATE_HARD_MAX_TURNS", settings.HardMaxTurns, func(v int) bool { return v > 0 })
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.DirectJudgeEvery, err = parseOptionalInt("DEBATE_DIRECT_JUDGE_EVERY", settings.DirectJudgeEvery, func(v int) bool { return v > 0 })
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.LLMHistoryWindow, err = parseOptionalInt("DEBATE_LLM_HISTORY_WINDOW", settings.LLMHistoryWindow, func(v int) bool { return v > 0 })
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.RunTimeout, err = parseOptionalDuration("DEBATE_RUN_TIMEOUT", settings.RunTimeout, func(v time.Duration) bool { return v > 0 })
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.StreamTurnBuffer, err = parseOptionalInt("DEBATE_STREAM_TURN_BUFFER", settings.StreamTurnBuffer, func(v int) bool { return v > 0 })
 	if err != nil {
 		return Settings{}, err
 	}

@@ -15,6 +15,7 @@ type fakeLLM struct {
 	moderatorCalls   int
 	finalCalls       int
 	selectCalls      int
+	judgeCalls       int
 	judgeAtTurn      int
 	openingSpeakerID string
 	selectDelay      time.Duration
@@ -22,6 +23,9 @@ type fakeLLM struct {
 	judgeDelay       time.Duration
 	moderatorDelay   time.Duration
 	turnBySpeakerID  map[string]string
+	judgeScoreBase   float64
+	judgeScoreStep   float64
+	maxSeenTurnCount int
 	// Optional override for judge summary. Empty string is allowed.
 	useCustomJudgeSummary bool
 	judgeSummary          string
@@ -32,6 +36,9 @@ func (f *fakeLLM) GenerateTurn(ctx context.Context, input GenerateTurnInput) (Ge
 		return GenerateTurnOutput{}, err
 	}
 	f.generateCalls++
+	if len(input.Turns) > f.maxSeenTurnCount {
+		f.maxSeenTurnCount = len(input.Turns)
+	}
 	content := fmt.Sprintf("turn %d by %s", f.generateCalls, input.Speaker.Name)
 	if custom, ok := f.turnBySpeakerID[strings.TrimSpace(input.Speaker.ID)]; ok {
 		content = custom
@@ -51,6 +58,9 @@ func (f *fakeLLM) GenerateModerator(ctx context.Context, input GenerateModerator
 		return GenerateModeratorOutput{}, err
 	}
 	f.moderatorCalls++
+	if len(input.Turns) > f.maxSeenTurnCount {
+		f.maxSeenTurnCount = len(input.Turns)
+	}
 	return GenerateModeratorOutput{
 		Content: "moderator summary before " + input.NextSpeaker.Name,
 		Usage: Usage{
@@ -97,10 +107,25 @@ func (f *fakeLLM) JudgeConsensus(ctx context.Context, input JudgeConsensusInput)
 	if err := waitWithContext(ctx, f.judgeDelay); err != nil {
 		return JudgeConsensusOutput{}, err
 	}
+	f.judgeCalls++
+	if len(input.Turns) > f.maxSeenTurnCount {
+		f.maxSeenTurnCount = len(input.Turns)
+	}
 	reached := len(input.Turns) >= f.judgeAtTurn
 	score := 0.2
+	if f.judgeScoreStep != 0 || f.judgeScoreBase != 0 {
+		score = f.judgeScoreBase + float64(f.judgeCalls-1)*f.judgeScoreStep
+		if score < 0 {
+			score = 0
+		}
+		if score > 1 {
+			score = 1
+		}
+	}
 	if reached {
-		score = 0.9
+		if score < 0.9 {
+			score = 0.9
+		}
 	}
 	summary := "summary"
 	if f.useCustomJudgeSummary {
@@ -170,6 +195,21 @@ func TestRunWithNilLLMReturnsError(t *testing.T) {
 	result, err := orch.Run(context.Background(), "topic", testPersonas(), nil)
 	if err == nil {
 		t.Fatal("expected error for nil llm client")
+	}
+	if !strings.Contains(err.Error(), "llm client is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusError {
+		t.Fatalf("expected status %q, got %q", StatusError, result.Status)
+	}
+}
+
+func TestRunWithTypedNilLLMReturnsError(t *testing.T) {
+	var llm *fakeLLM
+	orch := New(llm, Config{})
+	result, err := orch.Run(context.Background(), "topic", testPersonas(), nil)
+	if err == nil {
+		t.Fatal("expected error for typed-nil llm client")
 	}
 	if !strings.Contains(err.Error(), "llm client is required") {
 		t.Fatalf("unexpected error: %v", err)
@@ -297,6 +337,35 @@ func TestRunUnlimitedStopsOnNoProgress(t *testing.T) {
 	}
 }
 
+func TestRunUnlimitedRespectsHardMaxTurnsSafetyLimit(t *testing.T) {
+	llm := &fakeLLM{
+		judgeAtTurn:    9999,
+		judgeScoreBase: 0.10,
+		judgeScoreStep: 0.03,
+	}
+	orch := New(llm, Config{
+		MaxTurns:                0,
+		UnlimitedHardMaxTurns:   5,
+		ConsensusThreshold:      0.95,
+		MaxDuration:             5 * time.Minute,
+		MaxTotalTokens:          1_000_000,
+		MaxNoProgressJudges:     1000,
+		NoProgressEpsilon:       0.0001,
+		DirectHandoffJudgeEvery: 2,
+	})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", testPersonas(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if result.Status != StatusMaxTurnsReached {
+		t.Fatalf("expected status=%s, got %s", StatusMaxTurnsReached, result.Status)
+	}
+	if llm.generateCalls != 5 {
+		t.Fatalf("expected 5 persona turns from hard max limit, got %d", llm.generateCalls)
+	}
+}
+
 func TestRunStopsOnTokenLimitWithoutFinalModeratorLLMCall(t *testing.T) {
 	llm := &fakeLLM{judgeAtTurn: 999}
 	orch := New(llm, Config{
@@ -356,6 +425,25 @@ func TestRunStopsOnDurationWhenLLMCallExceedsDeadline(t *testing.T) {
 	}
 	if result.Turns[0].Type != TurnTypeModerator {
 		t.Fatalf("expected final fallback moderator turn, got %s", result.Turns[0].Type)
+	}
+}
+
+func TestRunLimitsLLMHistoryTurns(t *testing.T) {
+	llm := &fakeLLM{judgeAtTurn: 999}
+	orch := New(llm, Config{
+		MaxTurns:             10,
+		ConsensusThreshold:   0.95,
+		MaxNoProgressJudges:  1000,
+		NoProgressEpsilon:    0.0001,
+		LLMHistoryTurnWindow: 3,
+	})
+
+	_, err := orch.Run(context.Background(), "How do we reduce incidents?", testPersonas(), nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if llm.maxSeenTurnCount > 3 {
+		t.Fatalf("expected LLM turn window <=3, got %d", llm.maxSeenTurnCount)
 	}
 }
 
@@ -518,6 +606,46 @@ func TestSelectNextSpeakerPrefersExplicitDirective(t *testing.T) {
 	}
 }
 
+func TestSelectNextSpeakerIgnoresAmbiguousShortAliasInPlainSentence(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "x", Name: "X", Role: "analytics"},
+	}
+	got, direct := selectNextSpeaker(
+		personas,
+		personas[1],
+		"I suggest a phased rollout before wider launch.",
+		2,
+	)
+	if direct {
+		t.Fatal("did not expect direct handoff from ambiguous short alias")
+	}
+	if got != 2 {
+		t.Fatalf("expected fallback index 2, got %d", got)
+	}
+}
+
+func TestSelectNextSpeakerAllowsShortAliasWithExplicitAtMention(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "x", Name: "X", Role: "analytics"},
+	}
+	got, direct := selectNextSpeaker(
+		personas,
+		personas[1],
+		"@a can you take the next pass?",
+		2,
+	)
+	if !direct {
+		t.Fatal("expected direct handoff from explicit @mention")
+	}
+	if got != 0 {
+		t.Fatalf("expected index 0 for persona a, got %d", got)
+	}
+}
+
 func TestRunAppendsCanonicalNextSpeakerLineOnFallback(t *testing.T) {
 	personas := []persona.Persona{
 		{ID: "a", Name: "A", Role: "architecture"},
@@ -560,10 +688,11 @@ func TestRunDirectHandoffModeJudgesEveryTurn(t *testing.T) {
 		},
 	}
 	orch := New(llm, Config{
-		MaxTurns:            0,
-		ConsensusThreshold:  0.75,
-		MaxNoProgressJudges: 2,
-		NoProgressEpsilon:   0.0001,
+		MaxTurns:                0,
+		ConsensusThreshold:      0.75,
+		MaxNoProgressJudges:     2,
+		NoProgressEpsilon:       0.0001,
+		DirectHandoffJudgeEvery: 1,
 	})
 
 	result, err := orch.Run(context.Background(), "How do we reduce incidents?", personas, nil)
@@ -578,6 +707,43 @@ func TestRunDirectHandoffModeJudgesEveryTurn(t *testing.T) {
 	}
 	if llm.moderatorCalls != 0 {
 		t.Fatalf("expected no interstitial moderator calls, got %d", llm.moderatorCalls)
+	}
+}
+
+func TestRunDirectHandoffDefaultJudgeCadenceIsEveryOtherTurn(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "c", Name: "C", Role: "analytics"},
+	}
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "a",
+		turnBySpeakerID: map[string]string{
+			"a": "의견 A\nNEXT: b\nCLOSE: no\nNEW_POINT: yes",
+			"b": "의견 B\nNEXT: c\nCLOSE: no\nNEW_POINT: yes",
+			"c": "의견 C\nNEXT: a\nCLOSE: no\nNEW_POINT: yes",
+		},
+	}
+	orch := New(llm, Config{
+		MaxTurns:            0,
+		ConsensusThreshold:  0.75,
+		MaxNoProgressJudges: 2,
+		NoProgressEpsilon:   0.0001,
+	})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", personas, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if result.Status != StatusNoProgressReached {
+		t.Fatalf("expected status=%s, got %s", StatusNoProgressReached, result.Status)
+	}
+	if llm.generateCalls != 6 {
+		t.Fatalf("expected 6 persona turns with default direct-mode judge cadence, got %d", llm.generateCalls)
+	}
+	if llm.judgeCalls != 3 {
+		t.Fatalf("expected 3 judge calls with every-other-turn cadence, got %d", llm.judgeCalls)
 	}
 }
 
@@ -671,5 +837,23 @@ func TestDirectHandoffNoProgressLimit(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("persona=%d configured=%d got=%d want=%d", tc.personaCount, tc.configured, got, tc.want)
 		}
+	}
+}
+
+func TestShouldJudgeDirectHandoff(t *testing.T) {
+	if !shouldJudgeDirectHandoff(0, 1) {
+		t.Fatal("expected every-turn cadence when every=1")
+	}
+	if shouldJudgeDirectHandoff(0, 2) {
+		t.Fatal("did not expect judge at turnIndex=0 for every=2")
+	}
+	if !shouldJudgeDirectHandoff(1, 2) {
+		t.Fatal("expected judge at turnIndex=1 for every=2")
+	}
+	if !shouldJudgeDirectHandoff(2, 3) {
+		t.Fatal("expected judge at turnIndex=2 for every=3")
+	}
+	if !shouldJudgeDirectHandoff(2, 0) {
+		t.Fatal("expected fallback to every-turn when cadence is invalid")
 	}
 }

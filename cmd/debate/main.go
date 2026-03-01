@@ -48,11 +48,14 @@ func main() {
 	}
 
 	runner := orchestrator.New(client, orchestrator.Config{
-		MaxTurns:            settings.MaxTurns,
-		ConsensusThreshold:  settings.ConsensusThreshold,
-		MaxDuration:         settings.MaxDuration,
-		MaxTotalTokens:      settings.MaxTotalTokens,
-		MaxNoProgressJudges: settings.MaxNoProgressJudge,
+		MaxTurns:                settings.MaxTurns,
+		ConsensusThreshold:      settings.ConsensusThreshold,
+		MaxDuration:             settings.MaxDuration,
+		MaxTotalTokens:          settings.MaxTotalTokens,
+		MaxNoProgressJudges:     settings.MaxNoProgressJudge,
+		UnlimitedHardMaxTurns:   settings.HardMaxTurns,
+		DirectHandoffJudgeEvery: settings.DirectJudgeEvery,
+		LLMHistoryTurnWindow:    settings.LLMHistoryWindow,
 	})
 
 	app := web.NewApp(web.Config{
@@ -62,6 +65,8 @@ func main() {
 		Runner:      runner,
 		Loader:      persona.LoadFromFile,
 		Now:         time.Now,
+		RunTimeout:  settings.RunTimeout,
+		TurnBuffer:  settings.StreamTurnBuffer,
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

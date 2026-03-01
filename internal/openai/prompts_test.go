@@ -127,8 +127,17 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "answer it in your first sentence") {
 		t.Fatalf("expected moderator-question-first guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "steelman sentence") {
+		t.Fatalf("expected steelman guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "last two turns") {
+		t.Fatalf("expected repeat guardrail for two-turn window, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "NEXT: <persona_id>") {
 		t.Fatalf("expected explicit next speaker line format, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "HANDOFF_ASK:") {
+		t.Fatalf("expected explicit handoff ask control line, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
 		t.Fatalf("expected explicit termination signals, prompt=%q", prompt)
@@ -245,10 +254,12 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 			{Index: 1, SpeakerName: orchestrator.ModeratorSpeakerName, Type: orchestrator.TurnTypeModerator, Content: "정리"},
 		},
 		Consensus: orchestrator.Consensus{
-			Reached:   true,
-			Score:     0.91,
-			Summary:   "핵심 가설과 실행안에 합의함",
-			Rationale: "실험 우선순위가 정렬됨",
+			Reached:            true,
+			Score:              0.91,
+			Summary:            "핵심 가설과 실행안에 합의함",
+			Rationale:          "실험 우선순위가 정렬됨",
+			OpenRisks:          []string{"모니터링 임계치 미확정"},
+			RequiredNextAction: "SRE가 롤백 트리거를 오늘 확정",
 		},
 		FinalStatus: orchestrator.StatusConsensusReached,
 	}
@@ -262,6 +273,12 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "judge rationale") {
 		t.Fatalf("expected rationale in prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "open risks:") {
+		t.Fatalf("expected open risks in prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "required next action") {
+		t.Fatalf("expected required next action in prompt, prompt=%q", prompt)
 	}
 }
 
@@ -303,14 +320,20 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "Turn objective:") {
 		t.Fatalf("expected turn objective section, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "targeted handoff question/request") {
-		t.Fatalf("expected explicit handoff objective, prompt=%q", prompt)
+	if !strings.Contains(prompt, "Debate phase:") || !strings.Contains(prompt, "current phase:") {
+		t.Fatalf("expected debate phase guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "final line must be: NEXT: <persona_id>") {
-		t.Fatalf("expected explicit next-speaker objective, prompt=%q", prompt)
+	if !strings.Contains(prompt, "decision-forcing handoff question") {
+		t.Fatalf("expected decision-forcing handoff objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "HANDOFF_ASK:") || !strings.Contains(prompt, "NEXT: <persona_id>") {
+		t.Fatalf("expected explicit control lines for handoff, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
 		t.Fatalf("expected explicit close/new-point objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "last two-turn claims") {
+		t.Fatalf("expected repeat guardrail in turn objective, prompt=%q", prompt)
 	}
 }
 
@@ -324,6 +347,12 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "at least two different speakers/turns") {
 		t.Fatalf("expected rationale evidence requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "open_risks") || !strings.Contains(prompt, "required_next_action") {
+		t.Fatalf("expected expanded judge output schema, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "owner and trigger/deadline") {
+		t.Fatalf("expected required_next_action calibration guidance, prompt=%q", prompt)
 	}
 }
 
@@ -355,5 +384,14 @@ func TestDerivePromptBudgetCompressesOnLongDebates(t *testing.T) {
 	}
 	if compressed.judgeRecentLogLimit >= base.judgeRecentLogLimit {
 		t.Fatalf("expected compressed judge log window, base=%d compressed=%d", base.judgeRecentLogLimit, compressed.judgeRecentLogLimit)
+	}
+}
+
+func TestDebatePhaseSwitchesByTurnWindow(t *testing.T) {
+	if got := debatePhase(1, 3); got != "exploration" {
+		t.Fatalf("expected exploration phase, got %s", got)
+	}
+	if got := debatePhase(6, 3); got != "convergence" {
+		t.Fatalf("expected convergence phase, got %s", got)
 	}
 }

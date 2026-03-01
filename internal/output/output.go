@@ -152,6 +152,16 @@ func writeConsensusSection(b *strings.Builder, consensus orchestrator.Consensus)
 		b.WriteString("\n### Rationale\n\n")
 		b.WriteString(markdownBulletedText(consensus.Rationale, "") + "\n")
 	}
+	if len(consensus.OpenRisks) > 0 {
+		b.WriteString("\n### Open Risks\n\n")
+		for _, risk := range consensus.OpenRisks {
+			b.WriteString(markdownBulletedText(risk, "") + "\n")
+		}
+	}
+	if strings.TrimSpace(consensus.RequiredNextAction) != "" {
+		b.WriteString("\n### Required Next Action\n\n")
+		b.WriteString(markdownBulletedText(consensus.RequiredNextAction, "") + "\n")
+	}
 }
 
 func writePersonasSection(b *strings.Builder, personas []persona.Persona) {

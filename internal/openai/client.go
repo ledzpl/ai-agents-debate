@@ -299,6 +299,7 @@ func looksLikeTruncatedText(text string, completionTokens int, maxOutputTokens i
 		".", "!", "?", "…", "\"", "'", "”", "’",
 		"다.", "요.", "니다.", "했다.", "됩니다.", "한다.", "합니다.", "해요.", "임.", "됨.",
 		"다", "요", "니다", "합니다", "해요", "됨", "임",
+		"yes", "no",
 		"}", "]", ")",
 	}
 	for _, suffix := range completeSuffixes {

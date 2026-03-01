@@ -23,6 +23,8 @@ const (
 	defaultAddr       = ":8080"
 	maxRequestBytes   = 2 * 1024 * 1024
 	serverStopTimeout = 5 * time.Second
+	defaultRunTimeout = 30 * time.Minute
+	defaultTurnBuffer = 600
 )
 
 type Runner interface {
@@ -38,6 +40,8 @@ type Config struct {
 	Runner      Runner
 	Loader      LoaderFunc
 	Now         func() time.Time
+	RunTimeout  time.Duration
+	TurnBuffer  int
 }
 
 type App struct {
@@ -47,6 +51,8 @@ type App struct {
 	runner      Runner
 	loader      LoaderFunc
 	now         func() time.Time
+	runTimeout  time.Duration
+	turnBuffer  int
 	runsMu      sync.RWMutex
 	runs        map[string]*debateRun
 	runSeq      uint64
@@ -104,6 +110,12 @@ func NewApp(cfg Config) *App {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.RunTimeout <= 0 {
+		cfg.RunTimeout = defaultRunTimeout
+	}
+	if cfg.TurnBuffer <= 0 {
+		cfg.TurnBuffer = defaultTurnBuffer
+	}
 	baseDir := strings.TrimSpace(cfg.BaseDir)
 	if baseDir == "" {
 		wd, err := os.Getwd()
@@ -124,6 +136,8 @@ func NewApp(cfg Config) *App {
 		runner:      cfg.Runner,
 		loader:      cfg.Loader,
 		now:         cfg.Now,
+		runTimeout:  cfg.RunTimeout,
+		turnBuffer:  cfg.TurnBuffer,
 		runs:        make(map[string]*debateRun),
 	}
 }
@@ -255,13 +269,17 @@ func (a *App) handleDebateStreamStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runID := a.nextRunID()
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithTimeout(context.Background(), a.runTimeout)
 	run := newDebateRun(runID, streamStartEvent{
 		Problem:      req.Problem,
 		PersonaPath:  resolvedPath,
 		PersonaCount: len(personas),
-	}, cancel)
+	}, cancel, a.turnBuffer)
 	a.storeRun(run)
+	time.AfterFunc(a.runTimeout+runRetention, func() {
+		run.stop()
+		a.deleteRun(runID)
+	})
 
 	go a.executeDebateRun(runCtx, runID, run, req.Problem, personas)
 
@@ -308,7 +326,8 @@ func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
 
 	cursor := 0
 	for {
-		newTurns, done, stopped, resp, runErr := run.snapshot(cursor)
+		newTurns, adjustedCursor, done, stopped, resp, runErr := run.snapshot(cursor)
+		cursor = adjustedCursor
 		for _, turn := range newTurns {
 			if err := writeSSE(w, flusher, "turn", turn); err != nil {
 				return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 	defaultMaxTotalTokens         = 120000
 	defaultMaxNoProgress          = 6
 	defaultNoProgressEpsilon      = 0.01
+	defaultUnlimitedHardMaxTurns  = 400
+	defaultDirectJudgeEvery       = 2
+	defaultLLMHistoryTurnWindow   = 120
 )
 
 type Usage struct {
@@ -50,10 +54,12 @@ type Turn struct {
 }
 
 type Consensus struct {
-	Reached   bool    `json:"reached"`
-	Score     float64 `json:"score"`
-	Summary   string  `json:"summary"`
-	Rationale string  `json:"rationale"`
+	Reached            bool     `json:"reached"`
+	Score              float64  `json:"score"`
+	Summary            string   `json:"summary"`
+	Rationale          string   `json:"rationale"`
+	OpenRisks          []string `json:"open_risks,omitempty"`
+	RequiredNextAction string   `json:"required_next_action,omitempty"`
 }
 
 type Metrics struct {
@@ -154,6 +160,13 @@ type Config struct {
 	MaxTotalTokens      int
 	MaxNoProgressJudges int
 	NoProgressEpsilon   float64
+	// UnlimitedHardMaxTurns applies only when MaxTurns == 0.
+	UnlimitedHardMaxTurns int
+	// DirectHandoffJudgeEvery controls judge cadence in direct-handoff mode.
+	// 1 means every turn, 2 means every other turn.
+	DirectHandoffJudgeEvery int
+	// LLMHistoryTurnWindow limits how many recent turns are sent to LLM calls.
+	LLMHistoryTurnWindow int
 }
 
 type Orchestrator struct {
@@ -189,6 +202,15 @@ func New(llm LLMClient, cfg Config) *Orchestrator {
 	if cfg.NoProgressEpsilon <= 0 {
 		cfg.NoProgressEpsilon = defaultNoProgressEpsilon
 	}
+	if cfg.UnlimitedHardMaxTurns <= 0 {
+		cfg.UnlimitedHardMaxTurns = defaultUnlimitedHardMaxTurns
+	}
+	if cfg.DirectHandoffJudgeEvery <= 0 {
+		cfg.DirectHandoffJudgeEvery = defaultDirectJudgeEvery
+	}
+	if cfg.LLMHistoryTurnWindow <= 0 {
+		cfg.LLMHistoryTurnWindow = defaultLLMHistoryTurnWindow
+	}
 	return &Orchestrator{llm: llm, cfg: cfg}
 }
 
@@ -198,7 +220,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		Problem:   strings.TrimSpace(problem),
 		StartedAt: started,
 	}
-	if o == nil || o.llm == nil {
+	if o == nil || isNilLLMClient(o.llm) {
 		finalizeResult(&res, started, StatusError)
 		return res, errors.New("llm client is required")
 	}
@@ -220,6 +242,11 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		return o.finalizeWithModerator(ctx, &res, started, openingStopStatus, onTurn)
 	}
 
+	effectiveMaxTurns := o.cfg.MaxTurns
+	if effectiveMaxTurns <= 0 {
+		effectiveMaxTurns = o.cfg.UnlimitedHardMaxTurns
+	}
+
 	progress := judgeProgress{}
 	terminationSignals := newTerminationSignalTracker()
 	currentSpeakerIndex := openingSpeakerIndex
@@ -231,7 +258,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return res, fmt.Errorf("debate canceled: %w", err)
 		}
 
-		if status, shouldStop := o.preTurnStatus(started, i); shouldStop {
+		if status, shouldStop := o.preTurnStatus(started, i, effectiveMaxTurns); shouldStop {
 			return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
 		}
 
@@ -258,7 +285,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 
 		judgedThisTurn := false
-		if o.shouldJudgeAtTurn(i, len(normalized)) || directHandoffMode {
+		if o.shouldJudgeAtTurn(i, len(normalized), directHandoffMode) {
 			judgedThisTurn = true
 			status, done, err := o.judgeTurn(ctx, started, &res, normalized, turnNo, &progress)
 			if err != nil {
@@ -286,7 +313,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return o.finalizeWithModerator(ctx, &res, started, StatusNoProgressReached, onTurn)
 		}
 
-		if !hasNextPersonaTurn(i, o.cfg.MaxTurns) {
+		if !hasNextPersonaTurn(i, effectiveMaxTurns) {
 			return o.finalizeWithModerator(ctx, &res, started, StatusMaxTurnsReached, onTurn)
 		}
 
@@ -324,6 +351,19 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 	}
 }
 
+func isNilLLMClient(llm LLMClient) bool {
+	if llm == nil {
+		return true
+	}
+	v := reflect.ValueOf(llm)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
 func (o *Orchestrator) chooseOpeningSpeakerIndex(ctx context.Context, started time.Time, res *Result, personas []persona.Persona) (int, string, bool) {
 	index := defaultOpeningSpeakerIndex(res.Problem, personas)
 	selector, ok := o.llm.(OpeningSpeakerSelector)
@@ -354,8 +394,8 @@ func (o *Orchestrator) chooseOpeningSpeakerIndex(ctx context.Context, started ti
 	return index, "", false
 }
 
-func (o *Orchestrator) preTurnStatus(started time.Time, turnIndex int) (string, bool) {
-	if o.cfg.MaxTurns > 0 && turnIndex >= o.cfg.MaxTurns {
+func (o *Orchestrator) preTurnStatus(started time.Time, turnIndex int, maxTurns int) (string, bool) {
+	if maxTurns > 0 && turnIndex >= maxTurns {
 		return StatusMaxTurnsReached, true
 	}
 	if reachedDurationLimit(started, o.cfg.MaxDuration) {
@@ -368,7 +408,7 @@ func (o *Orchestrator) generatePersonaTurn(ctx context.Context, res *Result, per
 	out, err := o.llm.GenerateTurn(ctx, GenerateTurnInput{
 		Problem:  res.Problem,
 		Personas: personas,
-		Turns:    res.Turns,
+		Turns:    o.llmTurns(res.Turns),
 		Speaker:  speaker,
 	})
 	if err != nil {
@@ -390,9 +430,12 @@ func (o *Orchestrator) generatePersonaTurn(ctx context.Context, res *Result, per
 	}, nil
 }
 
-func (o *Orchestrator) shouldJudgeAtTurn(turnIndex int, personaCount int) bool {
+func (o *Orchestrator) shouldJudgeAtTurn(turnIndex int, personaCount int, directHandoffMode bool) bool {
 	if o.cfg.MaxTurns > 0 && turnIndex+1 >= o.cfg.MaxTurns {
 		return true
+	}
+	if directHandoffMode {
+		return shouldJudgeDirectHandoff(turnIndex, o.cfg.DirectHandoffJudgeEvery)
 	}
 	return shouldJudgeConsensus(turnIndex, personaCount)
 }
@@ -401,7 +444,7 @@ func (o *Orchestrator) evaluateConsensus(ctx context.Context, res *Result, perso
 	judgeOut, err := o.llm.JudgeConsensus(ctx, JudgeConsensusInput{
 		Problem:  res.Problem,
 		Personas: personas,
-		Turns:    res.Turns,
+		Turns:    o.llmTurns(res.Turns),
 	})
 	if err != nil {
 		return "", false, err
@@ -463,11 +506,26 @@ func directHandoffNoProgressLimit(personaCount int, configured int) int {
 	return limit
 }
 
+func shouldJudgeDirectHandoff(turnIndex int, every int) bool {
+	if every <= 1 {
+		return true
+	}
+	return (turnIndex+1)%every == 0
+}
+
+func (o *Orchestrator) llmTurns(turns []Turn) []Turn {
+	limit := o.cfg.LLMHistoryTurnWindow
+	if limit <= 0 || len(turns) <= limit {
+		return turns
+	}
+	return turns[len(turns)-limit:]
+}
+
 func (o *Orchestrator) generateModeratorTurn(ctx context.Context, res *Result, personas []persona.Persona, previousTurn Turn, nextSpeaker persona.Persona, turnNo int) (Turn, error) {
 	out, err := o.llm.GenerateModerator(ctx, GenerateModeratorInput{
 		Problem:       res.Problem,
 		Personas:      personas,
-		Turns:         res.Turns,
+		Turns:         o.llmTurns(res.Turns),
 		PreviousTurn:  previousTurn,
 		NextSpeaker:   nextSpeaker,
 		CurrentTurnNo: turnNo,

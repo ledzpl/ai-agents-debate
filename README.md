@@ -91,10 +91,15 @@ persona 경로는 아래 제약을 만족해야 합니다.
 | `OPENAI_BASE_URL` | 없음 | 커스텀 엔드포인트 베이스 URL |
 | `OPENAI_MODEL` | `gpt-5.2` | 사용할 모델 |
 | `DEBATE_MAX_TURNS` | `0` | persona 턴 최대치 (`0` = 무제한) |
-| `DEBATE_CONSENSUS_THRESHOLD` | `0.90` | 합의 점수 임계값 (`0..1`) |
+| `DEBATE_CONSENSUS_THRESHOLD` | `0.80` | 합의 점수 임계값 (`0..1`) |
 | `DEBATE_MAX_DURATION` | `20m` | 최대 실행 시간 (duration 형식) |
 | `DEBATE_MAX_TOTAL_TOKENS` | `120000` | 최대 누적 토큰 (`> 0`) |
 | `DEBATE_MAX_NO_PROGRESS_JUDGE` | `6` | 합의 점수 정체 허용 횟수 (`> 0`) |
+| `DEBATE_HARD_MAX_TURNS` | `400` | `DEBATE_MAX_TURNS=0`일 때 안전 하드 상한 (`> 0`) |
+| `DEBATE_DIRECT_JUDGE_EVERY` | `2` | direct handoff 구간 합의 판정 간격 (`> 0`) |
+| `DEBATE_LLM_HISTORY_WINDOW` | `120` | LLM 호출에 전달할 최근 turn 개수 (`> 0`) |
+| `DEBATE_RUN_TIMEOUT` | `30m` | stream run 서버측 타임아웃 |
+| `DEBATE_STREAM_TURN_BUFFER` | `600` | stream run 메모리 내 turn 버퍼 크기 |
 | `OPENAI_REQUEST_TIMEOUT` | `60s` | API 요청 타임아웃 |
 | `OPENAI_API_MAX_RETRIES` | `2` | API 재시도 횟수 (`>= 0`) |
 
@@ -102,8 +107,8 @@ persona 경로는 아래 제약을 만족해야 합니다.
 
 1. persona가 순환하면서 발언합니다.
 2. 기본적으로는 persona 발언 사이에 사회자가 요약/질문으로 개입합니다.
-3. 단, persona 발화 말미에 `NEXT: <persona_id>`가 명시되면 사회자 턴을 건너뛰고 해당 persona로 직접 핸드오프합니다.
-4. 사회자 없이 진행되는 구간에서는 각 persona가 말미에 `CLOSE: yes|no`, `NEW_POINT: yes|no`를 함께 남기며, `close 합의 + 신규 논점 정체`가 감지되면 조기 종료할 수 있습니다.
+3. 단, persona 발화 말미에 `HANDOFF_ASK`, `NEXT: <persona_id>`, `CLOSE: yes|no`, `NEW_POINT: yes|no` 제어 라인을 포함하면 사회자 턴을 건너뛰고 해당 persona로 직접 핸드오프합니다.
+4. 사회자 없이 진행되는 구간에서는 `close 합의 + 신규 논점 정체`가 감지되면 조기 종료할 수 있습니다.
 5. 라운드 단위로 합의 점수를 판정하며, 사회자 없는 연속 구간에서는 판정 빈도를 높입니다.
 6. 합의는 임계값 1회가 아닌 연속 판정(기본 2회)으로 확인 후 종료합니다.
 7. 종료 시 마지막은 항상 사회자 최종 정리 턴입니다.

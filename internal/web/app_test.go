@@ -622,6 +622,67 @@ func TestDebateStreamStopEndpointCancelsRun(t *testing.T) {
 	}
 }
 
+func TestDebateStreamRunTimeoutEmitsDebateError(t *testing.T) {
+	blocking := &stoppableRunner{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      blocking,
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now:        time.Now,
+		RunTimeout: 60 * time.Millisecond,
+	})
+
+	startReq := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{"problem":"timeout test"}`))
+	startRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected start status: %d body=%s", startRec.Code, startRec.Body.String())
+	}
+
+	var started streamStartResponse
+	if err := json.Unmarshal(startRec.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if strings.TrimSpace(started.RunID) == "" {
+		t.Fatalf("missing run_id: %#v", started)
+	}
+
+	select {
+	case <-blocking.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner did not start")
+	}
+
+	streamReq := httptest.NewRequest(http.MethodGet, "/api/debate/stream?run_id="+started.RunID, nil)
+	streamRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(streamRec, streamReq)
+	if streamRec.Code != http.StatusOK {
+		t.Fatalf("unexpected stream status: %d body=%s", streamRec.Code, streamRec.Body.String())
+	}
+	body := streamRec.Body.String()
+	if !strings.Contains(body, "event: debate_error") {
+		t.Fatalf("expected debate_error event on timeout, body=%s", body)
+	}
+	if !strings.Contains(body, "context deadline exceeded") {
+		t.Fatalf("expected context deadline error detail, body=%s", body)
+	}
+
+	select {
+	case <-blocking.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner was not canceled by timeout")
+	}
+}
+
 func TestPersonasEndpointMethodNotAllowed(t *testing.T) {
 	app := NewApp(Config{
 		PersonaPath: "./personas.json",

@@ -82,22 +82,26 @@ Rules:
 - Keep the debate interactive: explicitly connect to one named speaker's prior claim (agree, refine, or challenge).
 - If a moderator question/request is provided, answer it in your first sentence before expanding.
 - When possible, address one strongest counterpoint from another speaker.
+- Include one steelman sentence for an opposing view before your main rebuttal.
 - Add one new delta in each turn (new evidence, boundary condition, metric, dependency, or failure mode), not just restatement.
 - If you disagree, state which assumption differs and what evidence would falsify your position.
 - If you mostly agree, push toward convergence with a concrete decision criterion or next step.
 - Cite 1-2 prior turns by index notation like [3] when relevant.
 - Prefer specific, falsifiable statements (assumptions, constraints, metrics, tradeoffs).
 - Reference at least one previous point when possible.
-- Avoid repeating your own previous claims.
+- Do not repeat claims from your last two turns unless assumptions changed or new evidence is added.
 - If a metric/threshold is unchanged from your prior turn, cite it briefly instead of restating the full rationale.
 - Keep a clearly distinctive voice aligned with the persona profile, especially signature_lens if provided.
 - If a real expert is provided as master_name, use that person's known knowledge from books, papers, and articles as inspiration.
 - When master_name exists, include at least one concrete concept/framework from that body of work in your turn.
 - Do not claim to be the real person, and do not invent specific titles/dates when you are unsure.
 - End with one handoff sentence that helps the next speaker advance the debate.
-- End with one final line in this exact format: NEXT: <persona_id> (choose one participant id, not yourself).
-- Add one line "CLOSE: yes|no" (yes only if your current view is ready to end the debate now).
-- Add one line "NEW_POINT: yes|no" (yes only if this turn adds a materially new point).
+- End with one line: HANDOFF_ASK: <one concrete question the NEXT speaker must answer>.
+- End with one line: NEXT: <persona_id> (choose one participant id, not yourself).
+- End with one line: CLOSE: yes|no.
+  Use CLOSE=yes only when options are narrowed to <=2 and unresolved critical risks have explicit owners/next step.
+- End with one line: NEW_POINT: yes|no (yes only if this turn adds a materially new point).
+- The four control lines above must appear at the very end in that exact order.
 - Keep the response compact (roughly 3-6 short sentences, around 110 Korean words).
 - Return plain text only, without speaker labels or markdown.`)
 }
@@ -146,6 +150,7 @@ func buildOpeningSpeakerSelectorUserPrompt(input orchestrator.SelectOpeningSpeak
 
 func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
+	phase := debatePhase(len(input.Turns), len(input.Personas))
 
 	var b strings.Builder
 	b.WriteString("Problem:\n")
@@ -194,6 +199,16 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 		}
 	}
 
+	b.WriteString("\nDebate phase:\n")
+	b.WriteString("- current phase: " + phase + "\n")
+	if phase == "exploration" {
+		b.WriteString("- objective: expand options, expose assumptions, surface failure modes.\n")
+		b.WriteString("- avoid premature convergence; prioritize breadth with concrete evidence.\n")
+	} else {
+		b.WriteString("- objective: compress options, force decisions, and close open risks.\n")
+		b.WriteString("- prioritize explicit tradeoff choices, owners, and triggers.\n")
+	}
+
 	b.WriteString("\nInteraction memory snapshot:\n")
 	b.WriteString(buildTurnInteractionSnapshot(input.Turns, input.Speaker, budget))
 
@@ -205,10 +220,15 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 		b.WriteString("- respond to one concrete prior claim by speaker name and include at least one [turn-index] citation.\n")
 		b.WriteString("- resolve or sharpen one active tension with a condition/metric.\n")
 		b.WriteString("- contribute one new insight, not a restatement of your last claim.\n")
+		b.WriteString("- include one steelman of an opposing view before your rebuttal.\n")
 	}
-	b.WriteString("- end with a targeted handoff question/request to a specific participant.\n")
-	b.WriteString("- final line must be: NEXT: <persona_id> using an exact id from Participants.\n")
-	b.WriteString("- include: CLOSE: yes|no and NEW_POINT: yes|no on separate lines at the end.\n")
+	b.WriteString("- do not repeat your last two-turn claims unless assumptions changed or evidence is new.\n")
+	b.WriteString("- include a decision-forcing handoff question for the next speaker.\n")
+	b.WriteString("- tail control lines (required, exact order):\n")
+	b.WriteString("  - HANDOFF_ASK: <one concrete question the NEXT speaker must answer>\n")
+	b.WriteString("  - NEXT: <persona_id> (must match one Participants id exactly)\n")
+	b.WriteString("  - CLOSE: yes|no (yes only if <=2 options remain and unresolved critical risks have explicit owners/next step)\n")
+	b.WriteString("  - NEW_POINT: yes|no\n")
 	b.WriteString("- keep output concise: no long recap of the whole debate.\n")
 
 	b.WriteString("\nNow provide your next utterance.")
@@ -227,12 +247,15 @@ Judging rules:
   - 0.70-0.89: near-consensus with actionable direction but notable risk gaps.
   - 0.90-1.00: workable consensus with explicit decision and next-step clarity.
 - In rationale, cite decisive evidence from at least two different speakers/turns when possible.
+- For required_next_action, provide one concrete immediate action including owner and trigger/deadline.
 - Keep output compact: summary in 1 sentence, rationale in 1-2 short sentences.
 Return exactly one JSON object with keys:
 - reached (boolean)
 - score (number from 0 to 1)
 - summary (string)
 - rationale (string)
+- open_risks (array of short strings, empty array if none)
+- required_next_action (string, one concrete immediate action with owner/trigger)
 No markdown, no extra keys, no trailing text.`)
 }
 
@@ -338,6 +361,15 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 	}
 	if strings.TrimSpace(input.Consensus.Rationale) != "" {
 		b.WriteString("- judge rationale: " + strings.TrimSpace(input.Consensus.Rationale) + "\n")
+	}
+	if len(input.Consensus.OpenRisks) > 0 {
+		b.WriteString("- open risks:\n")
+		for _, risk := range input.Consensus.OpenRisks {
+			b.WriteString("  - " + strings.TrimSpace(risk) + "\n")
+		}
+	}
+	if strings.TrimSpace(input.Consensus.RequiredNextAction) != "" {
+		b.WriteString("- required next action: " + strings.TrimSpace(input.Consensus.RequiredNextAction) + "\n")
 	}
 
 	b.WriteString("\nDebate log tail:\n")
@@ -519,4 +551,14 @@ func trimTurns(turns []orchestrator.Turn, limit int) []orchestrator.Turn {
 		return turns
 	}
 	return turns[len(turns)-limit:]
+}
+
+func debatePhase(turnCount int, personaCount int) string {
+	if personaCount <= 0 {
+		return "convergence"
+	}
+	if turnCount < personaCount*2 {
+		return "exploration"
+	}
+	return "convergence"
 }

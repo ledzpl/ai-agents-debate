@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -165,7 +166,29 @@ func isRetriableError(err error) bool {
 	if errors.As(err, &statusErr) {
 		return statusErr.statusCode == http.StatusTooManyRequests || statusErr.statusCode >= 500
 	}
-	return true
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	if strings.Contains(msg, "openai request failed:") {
+		return true
+	}
+	if strings.Contains(msg, "read response body:") && !strings.Contains(msg, "exceeds limit") {
+		return true
+	}
+	if strings.Contains(msg, "build request:") ||
+		strings.Contains(msg, "decode response:") ||
+		strings.Contains(msg, "api error:") ||
+		strings.Contains(msg, "exceeds limit") {
+		return false
+	}
+	return false
 }
 
 func backoffDuration(attempt int) time.Duration {
