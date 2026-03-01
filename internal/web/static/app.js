@@ -1,0 +1,427 @@
+    const personaGroupEl = document.getElementById("personaGroup");
+    const personaMetaEl = document.getElementById("personaMeta");
+    const personaListEl = document.getElementById("personaList");
+    const problemEl = document.getElementById("problem");
+    const runBtn = document.getElementById("runBtn");
+    const statusText = document.getElementById("statusText");
+    const errorText = document.getElementById("errorText");
+    const progressWrapEl = document.getElementById("progressWrap");
+    const progressLabelEl = document.getElementById("progressLabel");
+    const debateWindowEl = document.getElementById("debateWindow");
+    const turnMetaEl = document.getElementById("turnMeta");
+
+    const predefinedGroups = [
+      { label: "아이디어", path: "./exmaples/personas.ideas.json" },
+      { label: "브레인스토밍", path: "./exmaples/personas.brainstorming.json" },
+      { label: "PM", path: "./exmaples/personas.pm.json" },
+      { label: "컴퍼니", path: "./exmaples/personas.company.json" },
+      { label: "SEC", path: "./exmaples/personas.sec.json" },
+      { label: "친구", path: "./exmaples/personas.friend.json" },
+      { label: "뮤직", path: "./exmaples/personas.music.json" }
+    ];
+
+    let personaGroups = [];
+    let selectedPersonaPath = "";
+    let currentStream = null;
+    let turnCount = 0;
+    const maxRenderedTurnCards = 320;
+
+    function closeCurrentStream() {
+      if (!currentStream) return;
+      currentStream.close();
+      currentStream = null;
+    }
+
+    function setTurnMeta(count, state) {
+      let text = String(count) + " 턴";
+      if (state) {
+        text += " · " + state;
+      }
+      turnMetaEl.textContent = text;
+    }
+
+    function normalizeKey(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+
+    function clearActivePersona() {
+      const activeItems = personaListEl.querySelectorAll(".persona-item.is-active");
+      activeItems.forEach((item) => item.classList.remove("is-active"));
+    }
+
+    function highlightSpeakerPersona(speakerID, speakerName) {
+      const idKey = normalizeKey(speakerID);
+      const nameKey = normalizeKey(speakerName);
+      const items = personaListEl.querySelectorAll(".persona-item");
+      let matched = null;
+
+      items.forEach((item) => {
+        item.classList.remove("is-active");
+      });
+
+      if (idKey) {
+        matched = Array.from(items).find((item) => normalizeKey(item.dataset.personaId) === idKey) || null;
+      }
+      if (!matched && nameKey) {
+        matched = Array.from(items).find((item) => normalizeKey(item.dataset.personaName) === nameKey) || null;
+      }
+      if (matched) {
+        matched.classList.add("is-active");
+      }
+    }
+
+    function showProgress(text) {
+      progressLabelEl.textContent = text || "토론 진행 중...";
+      progressWrapEl.classList.add("active");
+      progressWrapEl.setAttribute("aria-hidden", "false");
+    }
+
+    function hideProgress() {
+      progressWrapEl.classList.remove("active");
+      progressWrapEl.setAttribute("aria-hidden", "true");
+    }
+
+    function hashText(text) {
+      const value = String(text || "");
+      let hash = 0;
+      for (let i = 0; i < value.length; i += 1) {
+        hash = (hash * 31 + value.charCodeAt(i)) % 2147483647;
+      }
+      return hash;
+    }
+
+    function hueFromText(text, offset) {
+      const base = (hashText(text) + Number(offset || 0)) % 140;
+      return 165 + base;
+    }
+
+    function initialsFromText(text) {
+      const cleaned = String(text || "").trim();
+      if (!cleaned) {
+        return "?";
+      }
+      const parts = cleaned.split(/\s+/).filter(Boolean);
+      if (parts.length === 1) {
+        return parts[0].slice(0, 2).toUpperCase();
+      }
+      return (parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase();
+    }
+
+    function parseJSON(text) {
+      try {
+        return JSON.parse(text);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function fetchPersonas(path) {
+      const url = path ? "/api/personas?path=" + encodeURIComponent(path) : "/api/personas";
+      const res = await fetch(url);
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || "persona 로딩 실패");
+      return payload;
+    }
+
+    function buildPersonaGroups(defaultPath) {
+      const merged = [{ label: "기본 그룹", path: defaultPath }].concat(predefinedGroups);
+      const seenPath = new Set();
+      personaGroups = merged.filter((group) => {
+        const key = String(group.path || "");
+        if (seenPath.has(key)) {
+          return false;
+        }
+        seenPath.add(key);
+        return true;
+      });
+
+      personaGroupEl.innerHTML = "";
+      personaGroups.forEach((group) => {
+        const option = document.createElement("option");
+        option.value = group.path;
+        option.textContent = group.label;
+        personaGroupEl.appendChild(option);
+      });
+    }
+
+    function getSelectedGroupLabel(path) {
+      const selected = personaGroups.find((group) => group.path === path);
+      if (!selected) {
+        return "선택 그룹";
+      }
+      return selected.label;
+    }
+
+    function renderPersonaList(personas) {
+      personaListEl.innerHTML = "";
+      if (!personas || personas.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "placeholder small";
+        empty.textContent = "표시할 persona가 없습니다.";
+        personaListEl.appendChild(empty);
+        return;
+      }
+
+      personas.forEach((persona, index) => {
+        const item = document.createElement("article");
+        item.className = "persona-item";
+        item.style.setProperty("--stagger", String(index + 1));
+        item.style.setProperty(
+          "--persona-hue",
+          String(hueFromText(persona.id || persona.name || String(index), index * 11))
+        );
+        item.dataset.personaId = persona.id || "";
+        item.dataset.personaName = persona.name || "";
+
+        const title = document.createElement("h3");
+        title.className = "persona-title";
+        title.textContent = String(index + 1) + ". " + (persona.name || persona.id || "Unnamed Persona");
+        const head = document.createElement("div");
+        head.className = "persona-head";
+
+        const avatar = document.createElement("span");
+        avatar.className = "persona-avatar";
+        avatar.textContent = initialsFromText(persona.name || persona.id || String(index + 1));
+
+        const role = document.createElement("p");
+        role.className = "persona-role";
+        role.textContent = persona.role || persona.stance || "(역할 설명 없음)";
+
+        const master = document.createElement("p");
+        master.className = "persona-master";
+        master.textContent = "Master: " + (persona.master_name || "-");
+
+        head.appendChild(avatar);
+        head.appendChild(title);
+        item.appendChild(head);
+        item.appendChild(master);
+        item.appendChild(role);
+        personaListEl.appendChild(item);
+      });
+    }
+
+    function createTurnCard(type, badge, name, content) {
+      const card = document.createElement("article");
+      card.className = "turn-card " + type;
+      if (type === "turn-persona") {
+        card.style.setProperty("--speaker-hue", String(hueFromText(name)));
+      } else if (type === "turn-system") {
+        card.style.setProperty("--speaker-hue", "166");
+      } else if (type === "turn-summary") {
+        card.style.setProperty("--speaker-hue", "219");
+      }
+
+      const head = document.createElement("div");
+      head.className = "turn-head";
+
+      const nameWrap = document.createElement("div");
+      nameWrap.className = "turn-name-wrap";
+
+      const avatarEl = document.createElement("span");
+      avatarEl.className = "turn-avatar";
+      if (type === "turn-system") {
+        avatarEl.textContent = "S";
+      } else if (type === "turn-summary") {
+        avatarEl.textContent = "R";
+      } else {
+        avatarEl.textContent = initialsFromText(name);
+      }
+
+      const badgeEl = document.createElement("span");
+      badgeEl.className = "turn-badge";
+      badgeEl.textContent = badge;
+
+      const nameEl = document.createElement("strong");
+      nameEl.className = "turn-name";
+      nameEl.textContent = name;
+
+      nameWrap.appendChild(avatarEl);
+      nameWrap.appendChild(nameEl);
+
+      head.appendChild(nameWrap);
+      head.appendChild(badgeEl);
+
+      const contentEl = document.createElement("p");
+      contentEl.className = "turn-content";
+      contentEl.textContent = content;
+
+      card.appendChild(head);
+      card.appendChild(contentEl);
+      return card;
+    }
+
+    function appendTurnCard(type, badge, name, content) {
+      const card = createTurnCard(type, badge, name, content);
+      card.style.setProperty("--turn-order", String(debateWindowEl.childElementCount + 1));
+      debateWindowEl.appendChild(card);
+      while (debateWindowEl.childElementCount > maxRenderedTurnCards) {
+        debateWindowEl.removeChild(debateWindowEl.firstElementChild);
+      }
+      debateWindowEl.scrollTop = debateWindowEl.scrollHeight;
+    }
+
+    function clearDebateWindow() {
+      debateWindowEl.innerHTML = "";
+      turnCount = 0;
+      setTurnMeta(0, "대기");
+      clearActivePersona();
+    }
+
+    function applyPersonaPayload(payload, path) {
+      selectedPersonaPath = payload.path || path || "";
+      personaMetaEl.textContent = getSelectedGroupLabel(path) + " · " + String(payload.personas.length) + "명";
+      renderPersonaList(payload.personas);
+    }
+
+    async function loadPersonasBySelectedGroup() {
+      const path = personaGroupEl.value.trim();
+      const payload = await fetchPersonas(path);
+      applyPersonaPayload(payload, path);
+    }
+
+    async function initPersonas() {
+      const payload = await fetchPersonas("");
+      const defaultPath = payload.path || "";
+      buildPersonaGroups(defaultPath);
+      personaGroupEl.value = defaultPath;
+      applyPersonaPayload(payload, defaultPath);
+    }
+
+
+    async function runDebate() {
+      errorText.textContent = "";
+      statusText.textContent = "토론 실행 중...";
+      runBtn.disabled = true;
+      showProgress("토론을 시작하는 중...");
+      closeCurrentStream();
+
+      try {
+        if (typeof EventSource === "undefined") {
+          throw new Error("이 브라우저는 SSE(EventSource)를 지원하지 않습니다.");
+        }
+
+        const problem = problemEl.value.trim();
+        if (!problem) throw new Error("토론 주제를 입력해 주세요.");
+
+        const params = new URLSearchParams();
+        params.set("problem", problem);
+        if (selectedPersonaPath) {
+          params.set("persona_path", selectedPersonaPath);
+        }
+
+        const stream = new EventSource("/api/debate/stream?" + params.toString());
+        currentStream = stream;
+        let finished = false;
+
+        stream.addEventListener("start", function (ev) {
+          const payload = parseJSON(ev.data) || {};
+          clearDebateWindow();
+          setTurnMeta(0, "진행 중");
+          showProgress("토론 진행 중...");
+          appendTurnCard(
+            "turn-system",
+            "START",
+            "토론 시작",
+            "주제: " + (payload.problem || problem) + "\n참여 persona 수: " + String(payload.persona_count || 0)
+          );
+        });
+
+        stream.addEventListener("turn", function (ev) {
+          const turn = parseJSON(ev.data);
+          if (!turn) {
+            return;
+          }
+          highlightSpeakerPersona(turn.speaker_id, turn.speaker_name);
+          turnCount += 1;
+          setTurnMeta(turnCount, "진행 중");
+          showProgress("토론 진행 중... (" + String(turnCount) + "턴)");
+          appendTurnCard(
+            "turn-persona",
+            "TURN " + String(turn.index || "?"),
+            turn.speaker_name || turn.speaker_id || "Unknown",
+            turn.content || ""
+          );
+        });
+
+        stream.addEventListener("complete", function (ev) {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          const payload = parseJSON(ev.data) || {};
+          const result = payload.result || {};
+          const consensus = result.consensus || {};
+          appendTurnCard(
+            "turn-summary",
+            "SUMMARY",
+            "토론 결과",
+            "status: " + (result.status || "-") + "\nconsensus_score: " + Number(consensus.score || 0).toFixed(2) +
+              "\nsummary: " + (consensus.summary || "-") +
+              "\nsaved_json: " + (payload.saved_json_path || "-") +
+              "\nsaved_markdown: " + (payload.saved_markdown_path || "-")
+          );
+          clearActivePersona();
+          setTurnMeta(turnCount, "완료");
+          statusText.textContent = "완료";
+          runBtn.disabled = false;
+          hideProgress();
+          closeCurrentStream();
+        });
+
+        stream.addEventListener("debate_error", function (ev) {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          const payload = parseJSON(ev.data) || {};
+          errorText.textContent = payload.error || "토론 실행 실패";
+          statusText.textContent = "실패";
+          clearActivePersona();
+          setTurnMeta(turnCount, "실패");
+          runBtn.disabled = false;
+          hideProgress();
+          closeCurrentStream();
+        });
+
+        stream.onerror = function () {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          if (!errorText.textContent) {
+            errorText.textContent = "스트림 연결이 종료되었습니다.";
+          }
+          statusText.textContent = "실패";
+          clearActivePersona();
+          setTurnMeta(turnCount, "실패");
+          runBtn.disabled = false;
+          hideProgress();
+          closeCurrentStream();
+        };
+      } catch (err) {
+        errorText.textContent = String(err.message || err);
+        statusText.textContent = "실패";
+        clearActivePersona();
+        setTurnMeta(turnCount, "실패");
+        runBtn.disabled = false;
+        hideProgress();
+      }
+    }
+
+    runBtn.addEventListener("click", runDebate);
+    personaGroupEl.addEventListener("change", async () => {
+      try {
+        errorText.textContent = "";
+        await loadPersonasBySelectedGroup();
+      } catch (err) {
+        personaMetaEl.textContent = "";
+        errorText.textContent = String(err.message || err);
+      }
+    });
+
+    initPersonas().catch((err) => {
+      personaMetaEl.textContent = "";
+      errorText.textContent = String(err.message || err);
+    });
+    setTurnMeta(0, "대기");
+    hideProgress();

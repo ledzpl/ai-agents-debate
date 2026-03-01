@@ -182,6 +182,10 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		Problem:   strings.TrimSpace(problem),
 		StartedAt: started,
 	}
+	if o == nil || o.llm == nil {
+		finalizeResult(&res, started, StatusError)
+		return res, errors.New("llm client is required")
+	}
 
 	if res.Problem == "" {
 		finalizeResult(&res, started, StatusError)

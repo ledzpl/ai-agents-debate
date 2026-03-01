@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,6 +31,7 @@ type LoaderFunc func(path string) ([]persona.Persona, error)
 
 type Config struct {
 	PersonaPath string
+	BaseDir     string
 	OutputDir   string
 	Runner      Runner
 	Loader      LoaderFunc
@@ -37,6 +40,7 @@ type Config struct {
 
 type App struct {
 	personaPath string
+	baseDir     string
 	outputDir   string
 	runner      Runner
 	loader      LoaderFunc
@@ -73,8 +77,22 @@ func NewApp(cfg Config) *App {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	baseDir := strings.TrimSpace(cfg.BaseDir)
+	if baseDir == "" {
+		wd, err := os.Getwd()
+		if err == nil {
+			baseDir = wd
+		} else {
+			baseDir = "."
+		}
+	}
+	if abs, err := filepath.Abs(baseDir); err == nil {
+		baseDir = abs
+	}
+
 	return &App{
 		personaPath: cfg.PersonaPath,
+		baseDir:     filepath.Clean(baseDir),
 		outputDir:   cfg.OutputDir,
 		runner:      cfg.Runner,
 		loader:      cfg.Loader,
@@ -111,6 +129,7 @@ func (a *App) Start(ctx context.Context, addr string) error {
 
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/", a.handleIndex)
 	mux.HandleFunc("/api/personas", a.handlePersonas)
 	mux.HandleFunc("/api/debate", a.handleDebate)
@@ -138,17 +157,18 @@ func (a *App) handlePersonas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := strings.TrimSpace(r.URL.Query().Get("path"))
-	if path == "" {
-		path = a.personaPath
+	loaderPath, displayPath, err := a.resolvePersonaPath(r.URL.Query().Get("path"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("resolve personas path: %v", err))
+		return
 	}
-	personas, err := a.loader(path)
+	personas, err := a.loader(loaderPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("load personas: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, personasResponse{
-		Path:     path,
+		Path:     displayPath,
 		Personas: personas,
 	})
 }
@@ -162,15 +182,9 @@ func (a *App) handleDebate(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxRequestBytes)
 	defer body.Close()
 
-	var req debateRequest
-	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-
-	problem := strings.TrimSpace(req.Problem)
-	if problem == "" {
-		writeError(w, http.StatusBadRequest, "problem is required")
+	req, err := decodeDebateRequest(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -180,23 +194,13 @@ func (a *App) handleDebate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := a.runner.Run(r.Context(), problem, personas, nil)
+	resp, err := a.runAndSaveDebate(r.Context(), req.Problem, personas, nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("run debate: %v", err))
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	savePath := output.NewTimestampPath(a.outputDir, a.now())
-	if err := output.SaveResult(savePath, result); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("save result: %v", err))
-		return
-	}
-
-	writeJSON(w, http.StatusOK, debateResponse{
-		Result:            result,
-		SavedJSONPath:     savePath,
-		SavedMarkdownPath: output.MarkdownPath(savePath),
-	})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +245,7 @@ func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var streamWriteErr error
-	result, err := a.runner.Run(streamCtx, problem, personas, func(turn orchestrator.Turn) {
+	resp, err := a.runAndSaveDebate(streamCtx, problem, personas, func(turn orchestrator.Turn) {
 		if streamWriteErr != nil {
 			return
 		}
@@ -255,40 +259,154 @@ func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		_ = writeSSE(w, flusher, "debate_error", map[string]string{
-			"error": fmt.Sprintf("run debate: %v", err),
+			"error": err.Error(),
 		})
 		return
 	}
-
-	savePath := output.NewTimestampPath(a.outputDir, a.now())
-	if err := output.SaveResult(savePath, result); err != nil {
-		_ = writeSSE(w, flusher, "debate_error", map[string]string{
-			"error": fmt.Sprintf("save result: %v", err),
-		})
-		return
-	}
-
-	_ = writeSSE(w, flusher, "complete", debateResponse{
-		Result:            result,
-		SavedJSONPath:     savePath,
-		SavedMarkdownPath: output.MarkdownPath(savePath),
-	})
+	_ = writeSSE(w, flusher, "complete", resp)
 }
 
 func (a *App) resolvePersonas(personaPath string, inline []persona.Persona) ([]persona.Persona, string, error) {
 	if len(inline) > 0 {
-		return inline, "", nil
+		normalized, err := persona.NormalizeAndValidate(inline)
+		if err != nil {
+			return nil, "", err
+		}
+		return normalized, "", nil
 	}
 
-	path := strings.TrimSpace(personaPath)
-	if path == "" {
-		path = a.personaPath
-	}
-	personas, err := a.loader(path)
+	loaderPath, displayPath, err := a.resolvePersonaPath(personaPath)
 	if err != nil {
-		return nil, path, err
+		return nil, "", err
 	}
-	return personas, path, nil
+	personas, err := a.loader(loaderPath)
+	if err != nil {
+		return nil, displayPath, err
+	}
+	normalized, err := persona.NormalizeAndValidate(personas)
+	if err != nil {
+		return nil, displayPath, err
+	}
+	return normalized, displayPath, nil
+}
+
+func (a *App) resolvePersonaPath(rawPath string) (loaderPath string, displayPath string, err error) {
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		path = strings.TrimSpace(a.personaPath)
+	}
+	if path == "" {
+		return "", "", errors.New("persona path is required")
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".json") {
+		return "", "", errors.New("persona path must be a .json file")
+	}
+
+	cleanPath := filepath.Clean(path)
+	candidateAbs := cleanPath
+	if !filepath.IsAbs(candidateAbs) {
+		candidateAbs = filepath.Join(a.baseDir, cleanPath)
+	}
+	candidateAbs, err = filepath.Abs(candidateAbs)
+	if err != nil {
+		return "", "", fmt.Errorf("abs path: %w", err)
+	}
+
+	baseForCheck, err := resolvePathForContainment(a.baseDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve base path: %w", err)
+	}
+	candidateForCheck, err := resolvePathForContainment(candidateAbs)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve persona path: %w", err)
+	}
+	isWithinBase, err := pathWithinBase(baseForCheck, candidateForCheck)
+	if err != nil {
+		return "", "", fmt.Errorf("relative path: %w", err)
+	}
+	if !isWithinBase {
+		return "", "", errors.New("persona path must stay within the project directory")
+	}
+
+	relToBase, err := filepath.Rel(a.baseDir, candidateAbs)
+	if err != nil {
+		return "", "", fmt.Errorf("loader relative path: %w", err)
+	}
+	if relToBase == ".." || strings.HasPrefix(relToBase, ".."+string(filepath.Separator)) {
+		return "", "", errors.New("persona path must stay within the project directory")
+	}
+	relToBase = filepath.Clean(relToBase)
+	loaderPath = relToBase
+	if !strings.HasPrefix(loaderPath, ".") {
+		loaderPath = "." + string(filepath.Separator) + loaderPath
+	}
+	displayPath = filepath.ToSlash(loaderPath)
+	return loaderPath, displayPath, nil
+}
+
+func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []persona.Persona, onTurn func(orchestrator.Turn)) (debateResponse, error) {
+	result, err := a.runner.Run(ctx, problem, personas, onTurn)
+	if err != nil {
+		return debateResponse{}, fmt.Errorf("run debate: %w", err)
+	}
+
+	savePath := output.NewTimestampPath(a.outputDir, a.now())
+	if err := output.SaveResult(savePath, result); err != nil {
+		return debateResponse{}, fmt.Errorf("save result: %w", err)
+	}
+
+	return debateResponse{
+		Result:            result,
+		SavedJSONPath:     savePath,
+		SavedMarkdownPath: output.MarkdownPath(savePath),
+	}, nil
+}
+
+func decodeDebateRequest(body io.Reader) (debateRequest, error) {
+	var req debateRequest
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return debateRequest{}, fmt.Errorf("invalid request body: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return debateRequest{}, errors.New("invalid request body: multiple json values are not allowed")
+	}
+
+	req.Problem = strings.TrimSpace(req.Problem)
+	if req.Problem == "" {
+		return debateRequest{}, errors.New("problem is required")
+	}
+	return req, nil
+}
+
+func resolvePathForContainment(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	switch {
+	case err == nil:
+		path = resolved
+	case os.IsNotExist(err):
+		// Keep original path for non-existent targets.
+	default:
+		return "", fmt.Errorf("evaluate symlink: %w", err)
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absPath), nil
+}
+
+func pathWithinBase(baseAbs, candidateAbs string) (bool, error) {
+	relToBase, err := filepath.Rel(baseAbs, candidateAbs)
+	if err != nil {
+		return false, err
+	}
+	if relToBase == ".." || strings.HasPrefix(relToBase, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func writeSSE(w io.Writer, flusher http.Flusher, event string, payload any) error {
@@ -320,303 +438,3 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
-
-const indexHTML = `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Debate Web</title>
-  <style>
-    :root {
-      --bg: #f6f7f9;
-      --panel: #ffffff;
-      --ink: #1f2937;
-      --muted: #6b7280;
-      --accent: #0f766e;
-      --accent-dark: #0a4e4a;
-      --line: #d1d5db;
-      --warn: #b91c1c;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at 0% 0%, #d7f5ec 0%, transparent 40%),
-        radial-gradient(circle at 100% 0%, #e8f0ff 0%, transparent 36%),
-        var(--bg);
-      min-height: 100vh;
-    }
-    .wrap {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 24px 16px 48px;
-    }
-    h1 {
-      margin: 8px 0 4px;
-      font-size: 28px;
-      letter-spacing: -0.03em;
-    }
-    .desc {
-      margin: 0 0 20px;
-      color: var(--muted);
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 14px;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.05);
-    }
-    label {
-      display: block;
-      font-weight: 600;
-      margin-bottom: 8px;
-    }
-    textarea, input {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px 12px;
-      font-size: 15px;
-      line-height: 1.4;
-      background: #fff;
-    }
-    textarea { min-height: 108px; resize: vertical; }
-    .row {
-      display: grid;
-      grid-template-columns: 1fr 160px;
-      gap: 12px;
-      align-items: end;
-    }
-    button {
-      border: 0;
-      border-radius: 10px;
-      background: linear-gradient(180deg, var(--accent), var(--accent-dark));
-      color: #fff;
-      font-weight: 700;
-      padding: 11px 12px;
-      cursor: pointer;
-      transition: transform 120ms ease, opacity 120ms ease;
-    }
-    button:disabled { opacity: 0.6; cursor: wait; }
-    button:hover:enabled { transform: translateY(-1px); }
-    .meta {
-      color: var(--muted);
-      font-size: 14px;
-      margin-top: 6px;
-    }
-    .error {
-      color: var(--warn);
-      margin-top: 10px;
-      white-space: pre-wrap;
-    }
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 14px;
-      line-height: 1.5;
-      background: #0b1324;
-      color: #e5edf6;
-      border-radius: 10px;
-      padding: 14px;
-    }
-    @media (max-width: 740px) {
-      .row { grid-template-columns: 1fr; }
-      h1 { font-size: 24px; }
-    }
-  </style>
-</head>
-<body>
-  <main class="wrap">
-    <h1>Debate Web</h1>
-    <p class="desc">CLI 엔진을 그대로 재사용해 브라우저에서 토론을 실행합니다.</p>
-
-    <section class="panel">
-      <label for="personaPath">Persona 파일 경로</label>
-      <input id="personaPath" placeholder="./personas.json" />
-      <div class="meta" id="personaInfo">persona 정보를 불러오는 중...</div>
-    </section>
-
-    <section class="panel">
-      <label for="problem">토론 주제</label>
-      <textarea id="problem" placeholder="예: 우리 팀의 온보딩 시간을 줄이기 위한 실험안을 설계해줘"></textarea>
-      <div class="row">
-        <div class="meta" id="statusText">대기 중</div>
-        <button id="runBtn">토론 실행</button>
-      </div>
-      <div class="error" id="errorText"></div>
-    </section>
-
-    <section class="panel">
-      <label>결과</label>
-      <pre id="resultText">아직 실행 결과가 없습니다.</pre>
-    </section>
-  </main>
-  <script>
-    const personaPathEl = document.getElementById("personaPath");
-    const personaInfoEl = document.getElementById("personaInfo");
-    const problemEl = document.getElementById("problem");
-    const runBtn = document.getElementById("runBtn");
-    const statusText = document.getElementById("statusText");
-    const errorText = document.getElementById("errorText");
-    const resultText = document.getElementById("resultText");
-    let currentStream = null;
-
-    function closeCurrentStream() {
-      if (!currentStream) return;
-      currentStream.close();
-      currentStream = null;
-    }
-
-    function parseJSON(text) {
-      try {
-        return JSON.parse(text);
-      } catch (_) {
-        return null;
-      }
-    }
-
-    async function fetchPersonas() {
-      const path = personaPathEl.value.trim();
-      const url = path ? "/api/personas?path=" + encodeURIComponent(path) : "/api/personas";
-      const res = await fetch(url);
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload.error || "persona 로딩 실패");
-
-      const names = payload.personas.map(p => p.name + " (" + p.id + ")").join(", ");
-      personaPathEl.value = payload.path || path;
-      personaInfoEl.textContent = String(payload.personas.length) + "명 로드됨: " + names;
-    }
-
-    async function runDebate() {
-      errorText.textContent = "";
-      statusText.textContent = "토론 실행 중...";
-      runBtn.disabled = true;
-      closeCurrentStream();
-
-      try {
-        if (typeof EventSource === "undefined") {
-          throw new Error("이 브라우저는 SSE(EventSource)를 지원하지 않습니다.");
-        }
-
-        const problem = problemEl.value.trim();
-        if (!problem) throw new Error("토론 주제를 입력해 주세요.");
-
-        const params = new URLSearchParams();
-        params.set("problem", problem);
-        const personaPath = personaPathEl.value.trim();
-        if (personaPath) {
-          params.set("persona_path", personaPath);
-        }
-
-        const lines = [];
-        const renderLines = function () {
-          if (lines.length === 0) {
-            resultText.textContent = "아직 실행 결과가 없습니다.";
-            return;
-          }
-          resultText.textContent = lines.join("\n");
-        };
-        const appendLine = function (line) {
-          lines.push(line);
-          renderLines();
-        };
-
-        const stream = new EventSource("/api/debate/stream?" + params.toString());
-        currentStream = stream;
-        let finished = false;
-
-        stream.addEventListener("start", function (ev) {
-          const payload = parseJSON(ev.data) || {};
-          lines.length = 0;
-          appendLine("stream_started: yes");
-          appendLine("problem: " + (payload.problem || problem));
-          if (payload.persona_path) {
-            appendLine("persona_path: " + payload.persona_path);
-          }
-          appendLine("persona_count: " + String(payload.persona_count || 0));
-          appendLine("");
-          appendLine("turns:");
-        });
-
-        stream.addEventListener("turn", function (ev) {
-          const turn = parseJSON(ev.data);
-          if (!turn) {
-            return;
-          }
-          appendLine("- [" + turn.index + "] " + turn.speaker_name + ": " + turn.content);
-        });
-
-        stream.addEventListener("complete", function (ev) {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          const payload = parseJSON(ev.data) || {};
-          const result = payload.result || {};
-          const consensus = result.consensus || {};
-          appendLine("");
-          appendLine("status: " + (result.status || "-"));
-          appendLine("consensus_score: " + Number(consensus.score || 0).toFixed(2));
-          appendLine("summary: " + (consensus.summary || "-"));
-          appendLine("");
-          appendLine("saved_json: " + (payload.saved_json_path || "-"));
-          appendLine("saved_markdown: " + (payload.saved_markdown_path || "-"));
-          statusText.textContent = "완료";
-          runBtn.disabled = false;
-          closeCurrentStream();
-        });
-
-        stream.addEventListener("debate_error", function (ev) {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          const payload = parseJSON(ev.data) || {};
-          errorText.textContent = payload.error || "토론 실행 실패";
-          statusText.textContent = "실패";
-          runBtn.disabled = false;
-          closeCurrentStream();
-        });
-
-        stream.onerror = function () {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          if (!errorText.textContent) {
-            errorText.textContent = "스트림 연결이 종료되었습니다.";
-          }
-          statusText.textContent = "실패";
-          runBtn.disabled = false;
-          closeCurrentStream();
-        };
-      } catch (err) {
-        errorText.textContent = String(err.message || err);
-        statusText.textContent = "실패";
-        runBtn.disabled = false;
-      }
-    }
-
-    runBtn.addEventListener("click", runDebate);
-    personaPathEl.addEventListener("change", async () => {
-      try {
-        await fetchPersonas();
-      } catch (err) {
-        personaInfoEl.textContent = "";
-        errorText.textContent = String(err.message || err);
-      }
-    });
-
-    fetchPersonas().catch((err) => {
-      personaInfoEl.textContent = "";
-      errorText.textContent = String(err.message || err);
-    });
-  </script>
-</body>
-</html>`

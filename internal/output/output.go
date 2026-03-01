@@ -23,6 +23,12 @@ type turnItem struct {
 	Turn orchestrator.Turn
 }
 
+var markdownEntityReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+)
+
 func SaveResult(path string, result orchestrator.Result) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -73,6 +79,10 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 	if _, err := tempFile.Write(data); err != nil {
 		cleanup()
 		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tempFile.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync temp file: %w", err)
 	}
 	if err := tempFile.Close(); err != nil {
 		_ = os.Remove(tempPath)
@@ -147,7 +157,7 @@ func safeText(v string) string {
 	if v == "" {
 		return "-"
 	}
-	return strings.ReplaceAll(v, "\n", " ")
+	return markdownEntityReplacer.Replace(strings.ReplaceAll(v, "\n", " "))
 }
 
 func markdownBulletedText(v string, indent string) string {
@@ -163,6 +173,7 @@ func markdownBulletedText(v string, indent string) string {
 		if trimmed == "" {
 			continue
 		}
+		trimmed = markdownEntityReplacer.Replace(trimmed)
 		if hasListPrefix(trimmed) || strings.HasPrefix(trimmed, "> ") {
 			out = append(out, indent+trimmed)
 			continue

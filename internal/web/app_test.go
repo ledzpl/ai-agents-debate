@@ -173,6 +173,79 @@ func TestDebateEndpointValidatesProblem(t *testing.T) {
 	}
 }
 
+func TestDebateEndpointRejectsUnknownField(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate", bytes.NewBufferString(`{"problem":"ok","unexpected":"x"}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDebateEndpointRejectsMultipleJSONValues(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate", bytes.NewBufferString(`{"problem":"ok"}{"problem":"no"}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDebateEndpointRejectsInvalidInlinePersonas(t *testing.T) {
+	runner := &stubRunner{}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      runner,
+		Loader: func(string) ([]persona.Persona, error) {
+			return nil, errors.New("loader should not be called")
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate", bytes.NewBufferString(`{
+		"problem":"inline validation",
+		"personas":[{"id":"p1","name":"Only One","role":"solo"}]
+	}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if runner.callCount != 0 {
+		t.Fatalf("runner must not be called, got %d", runner.callCount)
+	}
+}
+
 func TestDebateStreamEndpointStreamsTurnsAndComplete(t *testing.T) {
 	loadedPath := ""
 	loadedPersonas := []persona.Persona{
@@ -305,5 +378,117 @@ func TestIndexEndpointServed(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte("Debate Web")) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestStaticAssetServed(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return nil, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "const predefinedGroups") {
+		t.Fatalf("unexpected static content: %s", rec.Body.String())
+	}
+}
+
+func TestPersonasEndpointRejectsPathTraversal(t *testing.T) {
+	loaderCalled := false
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		BaseDir:     filepath.Join(t.TempDir(), "project"),
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			loaderCalled = true
+			return nil, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/personas?path=../secrets.json", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if loaderCalled {
+		t.Fatal("loader must not be called for invalid path")
+	}
+}
+
+func TestPersonasEndpointRejectsSymlinkEscape(t *testing.T) {
+	projectDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsidePersonas := filepath.Join(outsideDir, "outside.json")
+	if err := os.WriteFile(outsidePersonas, []byte("[]"), 0o644); err != nil {
+		t.Fatalf("write outside personas: %v", err)
+	}
+
+	linkPath := filepath.Join(projectDir, "link.json")
+	if err := os.Symlink(outsidePersonas, linkPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	loaderCalled := false
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		BaseDir:     projectDir,
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			loaderCalled = true
+			return nil, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/personas?path=./link.json", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if loaderCalled {
+		t.Fatal("loader must not be called for symlink escape path")
+	}
+}
+
+func TestPersonasEndpointRejectsNonJSONPath(t *testing.T) {
+	loaderCalled := false
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			loaderCalled = true
+			return nil, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/personas?path=./personas.txt", nil)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if loaderCalled {
+		t.Fatal("loader must not be called for invalid extension")
 	}
 }

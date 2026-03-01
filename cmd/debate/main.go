@@ -5,22 +5,20 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"debate/internal/config"
 	"debate/internal/openai"
 	"debate/internal/orchestrator"
 	"debate/internal/persona"
-	"debate/internal/repl"
-	"debate/internal/tui"
 	"debate/internal/web"
-	"golang.org/x/term"
 )
 
 type runtimeOptions struct {
 	personaPath string
-	webMode     bool
 	addr        string
 }
 
@@ -57,62 +55,27 @@ func main() {
 		MaxNoProgressJudges: settings.MaxNoProgressJudge,
 	})
 
-	if opts.webMode {
-		app := web.NewApp(web.Config{
-			PersonaPath: opts.personaPath,
-			OutputDir:   config.DefaultOutputDir,
-			Runner:      runner,
-			Loader:      persona.LoadFromFile,
-			Now:         time.Now,
-		})
-		if err := app.Start(context.Background(), opts.addr); err != nil {
-			_, _ = fmt.Fprintln(os.Stderr, "runtime error:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	if isTTY() {
-		app := tui.NewApp(tui.Config{
-			PersonaPath: opts.personaPath,
-			OutputDir:   config.DefaultOutputDir,
-			MaxTurns:    settings.MaxTurns,
-			Runner:      runner,
-			Loader:      persona.LoadFromFile,
-			Now:         time.Now,
-		})
-		if err := app.Start(context.Background()); err != nil {
-			_, _ = fmt.Fprintln(os.Stderr, "runtime error:", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Fallback for non-interactive shells (pipes, CI).
-	app := repl.NewApp(repl.Config{
+	app := web.NewApp(web.Config{
 		PersonaPath: opts.personaPath,
+		BaseDir:     ".",
 		OutputDir:   config.DefaultOutputDir,
 		Runner:      runner,
 		Loader:      persona.LoadFromFile,
-		Writer:      os.Stdout,
 		Now:         time.Now,
 	})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if err := app.Start(context.Background(), os.Stdin); err != nil {
+	if err := app.Start(ctx, opts.addr); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "runtime error:", err)
 		os.Exit(1)
 	}
-}
-
-func isTTY() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 func parseRuntimeOptions(args []string) (runtimeOptions, error) {
 	fs := flag.NewFlagSet("debate", flag.ContinueOnError)
 	personaPath := fs.String("personas", config.DefaultPersonaPath, "path to personas json file")
 	fs.StringVar(personaPath, "persona", config.DefaultPersonaPath, "alias of -personas")
-	webMode := fs.Bool("web", false, "run web server mode")
 	addr := fs.String("addr", "", "web server listen address (e.g. :8080)")
 	fs.SetOutput(os.Stderr)
 
@@ -129,7 +92,6 @@ func parseRuntimeOptions(args []string) (runtimeOptions, error) {
 	}
 	return runtimeOptions{
 		personaPath: path,
-		webMode:     *webMode,
 		addr:        strings.TrimSpace(*addr),
 	}, nil
 }

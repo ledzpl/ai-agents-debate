@@ -137,6 +137,20 @@ func TestRunStopsOnConsensus(t *testing.T) {
 	}
 }
 
+func TestRunWithNilLLMReturnsError(t *testing.T) {
+	orch := New(nil, Config{})
+	result, err := orch.Run(context.Background(), "topic", testPersonas(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil llm client")
+	}
+	if !strings.Contains(err.Error(), "llm client is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != StatusError {
+		t.Fatalf("expected status %q, got %q", StatusError, result.Status)
+	}
+}
+
 func TestRunStopsOnMaxTurns(t *testing.T) {
 	llm := &fakeLLM{judgeAtTurn: 99}
 	orch := New(llm, Config{MaxTurns: 4, ConsensusThreshold: 0.75})

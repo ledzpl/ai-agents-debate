@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Debate Web</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <main class="wrap">
+    <div class="app-shell">
+      <header class="hero">
+        <h1>Debate Web</h1>
+      </header>
+
+      <div class="layout">
+        <aside class="panel sidebar">
+          <div class="section-head">
+            <h2>Persona Group</h2>
+          </div>
+          <label for="personaGroup">그룹 선택</label>
+          <select id="personaGroup" aria-label="persona 그룹 선택"></select>
+          <div class="meta" id="personaMeta">persona 정보를 불러오는 중...</div>
+          <div class="persona-list" id="personaList">
+            <div class="placeholder small">persona 목록을 불러오는 중...</div>
+          </div>
+        </aside>
+
+        <section class="panel discussion">
+          <div class="controls">
+            <label for="problem">토론 주제</label>
+            <textarea id="problem" placeholder="예: 우리 팀의 온보딩 시간을 줄이기 위한 실험안을 설계해줘"></textarea>
+            <div class="control-row">
+              <div class="meta" id="statusText">대기 중</div>
+              <button id="runBtn">토론 실행</button>
+            </div>
+            <div class="progress-wrap" id="progressWrap" aria-hidden="true">
+              <div class="progress-track">
+                <div class="progress-fill"></div>
+              </div>
+              <div class="progress-label" id="progressLabel">토론을 시작하는 중...</div>
+            </div>
+            <div class="error" id="errorText"></div>
+          </div>
+
+          <div class="discussion-head">
+            <h2>토론 타임라인</h2>
+            <div class="turn-meta" id="turnMeta">0 턴</div>
+          </div>
+          <div class="debate-window" id="debateWindow" aria-live="polite">
+            <div class="placeholder">아직 실행된 토론이 없습니다. 주제를 입력하고 실행해 주세요.</div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

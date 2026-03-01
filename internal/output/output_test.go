@@ -138,3 +138,33 @@ func TestGroupTurnsBySpeakerUsesSpeakerIDKey(t *testing.T) {
 		t.Fatalf("expected second speaker turns grouped by id, got %d", len(groups[1].Turns))
 	}
 }
+
+func TestFormatResultMarkdownEscapesHTMLSensitiveChars(t *testing.T) {
+	result := orchestrator.Result{
+		Problem: "<script>alert(1)</script>",
+		Status:  orchestrator.StatusError,
+		Turns: []orchestrator.Turn{
+			{
+				Index:       1,
+				SpeakerName: "A&B",
+				Type:        orchestrator.TurnTypePersona,
+				Content:     "<b>unsafe</b>",
+			},
+		},
+		Consensus: orchestrator.Consensus{
+			Summary: "<div>summary</div>",
+			Score:   0.3,
+		},
+	}
+
+	md := formatResultMarkdown(result)
+	if strings.Contains(md, "<script>") || strings.Contains(md, "<b>unsafe</b>") || strings.Contains(md, "<div>summary</div>") {
+		t.Fatalf("expected html-sensitive chars to be escaped, got %q", md)
+	}
+	if !strings.Contains(md, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("expected escaped problem text, got %q", md)
+	}
+	if !strings.Contains(md, "&lt;b&gt;unsafe&lt;/b&gt;") {
+		t.Fatalf("expected escaped turn content, got %q", md)
+	}
+}
