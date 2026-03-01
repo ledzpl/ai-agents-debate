@@ -32,6 +32,14 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json
 
 `--persona`는 `--personas`의 alias입니다.
 
+웹 모드로 실행:
+
+```bash
+go run ./cmd/debate --web --addr :8080
+```
+
+브라우저에서 `http://localhost:8080` 접속 후 토론 주제를 입력해 실행할 수 있습니다.
+
 기본 경로:
 
 - persona 파일: `./personas.json`
@@ -41,6 +49,20 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json
 
 - stdin/stdout이 TTY이면 TUI 모드
 - TTY가 아니면 REPL 모드
+- `--web` 플래그가 있으면 HTTP 서버(웹 UI + API) 모드
+
+웹 API:
+
+- `GET /api/personas?path=./personas.json`
+- `POST /api/debate` (JSON body: `problem`, optional `persona_path`, optional `personas`)
+- `GET /api/debate/stream?problem=...&persona_path=...` (SSE, turn 단위 실시간 이벤트)
+
+SSE 이벤트 타입:
+
+- `start`: 토론 시작 메타 정보
+- `turn`: 생성된 각 토론 턴
+- `complete`: 최종 결과 + 저장 경로
+- `debate_error`: 실행/저장 오류
 
 ## 환경 변수
 

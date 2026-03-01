@@ -14,6 +14,12 @@ func TestParseRuntimeOptionsDefaults(t *testing.T) {
 	if opts.personaPath != config.DefaultPersonaPath {
 		t.Fatalf("unexpected default persona path: %s", opts.personaPath)
 	}
+	if opts.webMode {
+		t.Fatal("expected webMode to be false by default")
+	}
+	if opts.addr != "" {
+		t.Fatalf("expected empty addr by default, got %q", opts.addr)
+	}
 }
 
 func TestParseRuntimeOptionsPersonasFlag(t *testing.T) {
@@ -40,5 +46,18 @@ func TestParseRuntimeOptionsRejectsPositionalArgs(t *testing.T) {
 	_, err := parseRuntimeOptions([]string{"unexpected"})
 	if err == nil {
 		t.Fatal("expected error for positional args")
+	}
+}
+
+func TestParseRuntimeOptionsWebModeAndAddr(t *testing.T) {
+	opts, err := parseRuntimeOptions([]string{"--web", "--addr", "  :8090  "})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !opts.webMode {
+		t.Fatal("expected webMode=true")
+	}
+	if opts.addr != ":8090" {
+		t.Fatalf("unexpected addr: %q", opts.addr)
 	}
 }
