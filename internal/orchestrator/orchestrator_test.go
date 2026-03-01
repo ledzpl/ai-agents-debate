@@ -544,6 +544,80 @@ func TestRunAppendsCanonicalNextSpeakerLineOnFallback(t *testing.T) {
 	}
 }
 
+func TestRunDirectHandoffModeJudgesEveryTurn(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "c", Name: "C", Role: "analytics"},
+	}
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "a",
+		turnBySpeakerID: map[string]string{
+			"a": "의견 A\nNEXT: b\nCLOSE: no\nNEW_POINT: yes",
+			"b": "의견 B\nNEXT: c\nCLOSE: no\nNEW_POINT: yes",
+			"c": "의견 C\nNEXT: a\nCLOSE: no\nNEW_POINT: yes",
+		},
+	}
+	orch := New(llm, Config{
+		MaxTurns:            0,
+		ConsensusThreshold:  0.75,
+		MaxNoProgressJudges: 2,
+		NoProgressEpsilon:   0.0001,
+	})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", personas, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if result.Status != StatusNoProgressReached {
+		t.Fatalf("expected status=%s, got %s", StatusNoProgressReached, result.Status)
+	}
+	if llm.generateCalls != 4 {
+		t.Fatalf("expected 4 persona turns with per-turn judging in direct mode, got %d", llm.generateCalls)
+	}
+	if llm.moderatorCalls != 0 {
+		t.Fatalf("expected no interstitial moderator calls, got %d", llm.moderatorCalls)
+	}
+}
+
+func TestRunDirectHandoffCanStopByCloseSignals(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "a", Name: "A", Role: "architecture"},
+		{ID: "b", Name: "B", Role: "operations"},
+		{ID: "c", Name: "C", Role: "analytics"},
+	}
+	llm := &fakeLLM{
+		judgeAtTurn:      999,
+		openingSpeakerID: "a",
+		turnBySpeakerID: map[string]string{
+			"a": "정리 제안\nNEXT: b\nCLOSE: yes\nNEW_POINT: no",
+			"b": "동의합니다\nNEXT: c\nCLOSE: yes\nNEW_POINT: no",
+			"c": "마무리하죠\nNEXT: a\nCLOSE: yes\nNEW_POINT: no",
+		},
+	}
+	orch := New(llm, Config{
+		MaxTurns:            0,
+		ConsensusThreshold:  0.90,
+		MaxNoProgressJudges: 50,
+		NoProgressEpsilon:   0.0001,
+	})
+
+	result, err := orch.Run(context.Background(), "How do we reduce incidents?", personas, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if result.Status != StatusNoProgressReached {
+		t.Fatalf("expected status=%s from close/new-point stop, got %s", StatusNoProgressReached, result.Status)
+	}
+	if llm.generateCalls != 3 {
+		t.Fatalf("expected early stop after 3 persona turns, got %d", llm.generateCalls)
+	}
+	if llm.moderatorCalls != 0 {
+		t.Fatalf("expected no interstitial moderator calls, got %d", llm.moderatorCalls)
+	}
+}
+
 func TestRunIgnoresOpeningSpeakerSelectionByName(t *testing.T) {
 	llm := &fakeLLM{
 		judgeAtTurn:      999,
@@ -579,5 +653,23 @@ func TestFinalizeStatusDowngradesToTokenLimitWhenFinalModeratorExceedsCap(t *tes
 	}
 	if result.Status != StatusTokenLimitReached {
 		t.Fatalf("expected status=%s, got %s", StatusTokenLimitReached, result.Status)
+	}
+}
+
+func TestDirectHandoffNoProgressLimit(t *testing.T) {
+	tests := []struct {
+		personaCount int
+		configured   int
+		want         int
+	}{
+		{personaCount: 2, configured: 6, want: 2},
+		{personaCount: 3, configured: 6, want: 3},
+		{personaCount: 5, configured: 2, want: 2},
+	}
+	for _, tc := range tests {
+		got := directHandoffNoProgressLimit(tc.personaCount, tc.configured)
+		if got != tc.want {
+			t.Fatalf("persona=%d configured=%d got=%d want=%d", tc.personaCount, tc.configured, got, tc.want)
+		}
 	}
 }

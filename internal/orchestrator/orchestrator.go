@@ -221,7 +221,9 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 	}
 
 	progress := judgeProgress{}
+	terminationSignals := newTerminationSignalTracker()
 	currentSpeakerIndex := openingSpeakerIndex
+	directHandoffMode := false
 
 	for i := 0; ; i++ {
 		if err := ctx.Err(); err != nil {
@@ -249,12 +251,15 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		if onTurn != nil {
 			onTurn(personaTurn)
 		}
+		terminationSignals.observe(personaTurn)
 
 		if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
 			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
 		}
 
-		if o.shouldJudgeAtTurn(i, len(normalized)) {
+		judgedThisTurn := false
+		if o.shouldJudgeAtTurn(i, len(normalized)) || directHandoffMode {
+			judgedThisTurn = true
 			stepCtx, cancel := o.callContext(ctx, started)
 			status, done, err := o.evaluateConsensus(stepCtx, &res, normalized, turnNo, &progress)
 			cancel()
@@ -268,6 +273,27 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			if done {
 				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
 			}
+			if directHandoffMode && progress.noProgressJudges >= directHandoffNoProgressLimit(len(normalized), o.cfg.MaxNoProgressJudges) {
+				return o.finalizeWithModerator(ctx, &res, started, StatusNoProgressReached, onTurn)
+			}
+		}
+		if terminationSignals.shouldSuggestStop(len(normalized)) {
+			if !judgedThisTurn {
+				stepCtx, cancel := o.callContext(ctx, started)
+				status, done, err := o.evaluateConsensus(stepCtx, &res, normalized, turnNo, &progress)
+				cancel()
+				if err != nil {
+					if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
+						return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+					}
+					finalizeResult(&res, started, StatusError)
+					return res, fmt.Errorf("judge consensus at turn %d: %w", turnNo, err)
+				}
+				if done {
+					return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+				}
+			}
+			return o.finalizeWithModerator(ctx, &res, started, StatusNoProgressReached, onTurn)
 		}
 
 		if !hasNextPersonaTurn(i, o.cfg.MaxTurns) {
@@ -282,6 +308,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		)
 		if directHandoff {
 			currentSpeakerIndex = nextSpeakerIndex
+			directHandoffMode = true
 			continue
 		}
 		nextSpeaker := normalized[nextSpeakerIndex]
@@ -303,6 +330,7 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
 		}
 		currentSpeakerIndex = nextSpeakerIndex
+		directHandoffMode = false
 	}
 }
 
@@ -419,6 +447,17 @@ func requiredConsensusConfirmations(personaCount int) int {
 		return 1
 	}
 	return defaultConsensusConfirmations
+}
+
+func directHandoffNoProgressLimit(personaCount int, configured int) int {
+	limit := 3
+	if personaCount <= 2 {
+		limit = 2
+	}
+	if configured > 0 && configured < limit {
+		return configured
+	}
+	return limit
 }
 
 func (o *Orchestrator) generateModeratorTurn(ctx context.Context, res *Result, personas []persona.Persona, previousTurn Turn, nextSpeaker persona.Persona, turnNo int) (Turn, error) {

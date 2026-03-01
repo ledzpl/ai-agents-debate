@@ -132,8 +132,13 @@
       while (lines.length > 0 && !lines[lines.length - 1].trim()) {
         lines.pop();
       }
-      if (lines.length > 0 && /^next\s*[:=]/i.test(lines[lines.length - 1].trim())) {
-        lines.pop();
+      while (lines.length > 0) {
+        const tail = lines[lines.length - 1].trim();
+        if (/^next\s*[:=]/i.test(tail) || /^close\s*[:=]/i.test(tail) || /^new[_-]?point\s*[:=]/i.test(tail)) {
+          lines.pop();
+          continue;
+        }
+        break;
       }
       return lines.join("\n").trim();
     }

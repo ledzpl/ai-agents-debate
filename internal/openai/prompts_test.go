@@ -130,6 +130,9 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "NEXT: <persona_id>") {
 		t.Fatalf("expected explicit next speaker line format, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
+		t.Fatalf("expected explicit termination signals, prompt=%q", prompt)
+	}
 }
 
 func TestBuildOpeningSpeakerSelectorPrompts(t *testing.T) {
@@ -305,6 +308,9 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	}
 	if !strings.Contains(prompt, "final line must be: NEXT: <persona_id>") {
 		t.Fatalf("expected explicit next-speaker objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
+		t.Fatalf("expected explicit close/new-point objective, prompt=%q", prompt)
 	}
 }
 

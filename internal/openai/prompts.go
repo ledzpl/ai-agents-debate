@@ -96,6 +96,8 @@ Rules:
 - Do not claim to be the real person, and do not invent specific titles/dates when you are unsure.
 - End with one handoff sentence that helps the next speaker advance the debate.
 - End with one final line in this exact format: NEXT: <persona_id> (choose one participant id, not yourself).
+- Add one line "CLOSE: yes|no" (yes only if your current view is ready to end the debate now).
+- Add one line "NEW_POINT: yes|no" (yes only if this turn adds a materially new point).
 - Keep the response compact (roughly 3-6 short sentences, around 110 Korean words).
 - Return plain text only, without speaker labels or markdown.`)
 }
@@ -206,6 +208,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	}
 	b.WriteString("- end with a targeted handoff question/request to a specific participant.\n")
 	b.WriteString("- final line must be: NEXT: <persona_id> using an exact id from Participants.\n")
+	b.WriteString("- include: CLOSE: yes|no and NEW_POINT: yes|no on separate lines at the end.\n")
 	b.WriteString("- keep output concise: no long recap of the whole debate.\n")
 
 	b.WriteString("\nNow provide your next utterance.")
