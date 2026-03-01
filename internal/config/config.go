@@ -14,7 +14,7 @@ const (
 	DefaultOutputDir          = "./outputs"
 	DefaultModel              = "gpt-5.2"
 	DefaultMaxTurns           = 0
-	DefaultConsensusThreshold = 0.90
+	DefaultConsensusThreshold = 0.80
 	DefaultMaxDuration        = 20 * time.Minute
 	DefaultMaxTotalTokens     = 120000
 	DefaultMaxNoProgressJudge = 6

@@ -260,15 +260,10 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		judgedThisTurn := false
 		if o.shouldJudgeAtTurn(i, len(normalized)) || directHandoffMode {
 			judgedThisTurn = true
-			stepCtx, cancel := o.callContext(ctx, started)
-			status, done, err := o.evaluateConsensus(stepCtx, &res, normalized, turnNo, &progress)
-			cancel()
+			status, done, err := o.judgeTurn(ctx, started, &res, normalized, turnNo, &progress)
 			if err != nil {
-				if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
-					return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
-				}
 				finalizeResult(&res, started, StatusError)
-				return res, fmt.Errorf("judge consensus at turn %d: %w", turnNo, err)
+				return res, err
 			}
 			if done {
 				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
@@ -279,15 +274,10 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 		if terminationSignals.shouldSuggestStop(len(normalized)) {
 			if !judgedThisTurn {
-				stepCtx, cancel := o.callContext(ctx, started)
-				status, done, err := o.evaluateConsensus(stepCtx, &res, normalized, turnNo, &progress)
-				cancel()
+				status, done, err := o.judgeTurn(ctx, started, &res, normalized, turnNo, &progress)
 				if err != nil {
-					if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
-						return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
-					}
 					finalizeResult(&res, started, StatusError)
-					return res, fmt.Errorf("judge consensus at turn %d: %w", turnNo, err)
+					return res, err
 				}
 				if done {
 					return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
@@ -436,6 +426,19 @@ func (o *Orchestrator) evaluateConsensus(ctx context.Context, res *Result, perso
 		return StatusNoProgressReached, true, nil
 	}
 	return "", false, nil
+}
+
+func (o *Orchestrator) judgeTurn(ctx context.Context, started time.Time, res *Result, personas []persona.Persona, turnNo int, progress *judgeProgress) (string, bool, error) {
+	stepCtx, cancel := o.callContext(ctx, started)
+	status, done, err := o.evaluateConsensus(stepCtx, res, personas, turnNo, progress)
+	cancel()
+	if err != nil {
+		if durationStatus, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
+			return durationStatus, true, nil
+		}
+		return "", false, fmt.Errorf("judge consensus at turn %d: %w", turnNo, err)
+	}
+	return status, done, nil
 }
 
 func consensusSatisfied(consensus Consensus, threshold float64) bool {

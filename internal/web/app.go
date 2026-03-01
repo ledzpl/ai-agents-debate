@@ -508,13 +508,34 @@ func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []p
 
 func (a *App) nextOutputPath() (string, error) {
 	basePath := output.NewTimestampPath(a.outputDir, a.now())
-	seq := atomic.AddUint64(&a.outputSeq, 1)
-	if seq == 1 {
-		return basePath, nil
-	}
 	ext := filepath.Ext(basePath)
 	stem := strings.TrimSuffix(basePath, ext)
-	return fmt.Sprintf("%s-%06d%s", stem, seq-1, ext), nil
+
+	for {
+		seq := atomic.AddUint64(&a.outputSeq, 1)
+		candidate := basePath
+		if seq > 1 {
+			candidate = fmt.Sprintf("%s-%06d%s", stem, seq-1, ext)
+		}
+		available, err := pathAvailable(candidate)
+		if err != nil {
+			return "", err
+		}
+		if available {
+			return candidate, nil
+		}
+	}
+}
+
+func pathAvailable(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return false, nil
+	}
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return false, fmt.Errorf("stat output path %q: %w", path, err)
 }
 
 func decodeDebateRequest(body io.Reader) (debateRequest, error) {
