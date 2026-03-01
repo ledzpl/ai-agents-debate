@@ -27,28 +27,32 @@
         </aside>
 
         <section class="panel discussion">
-          <div class="controls">
-            <label for="problem">토론 주제</label>
-            <textarea id="problem" placeholder="예: 우리 팀의 온보딩 시간을 줄이기 위한 실험안을 설계해줘"></textarea>
-            <div class="control-row">
-              <div class="meta" id="statusText">대기 중</div>
-              <button id="runBtn">토론 실행</button>
-            </div>
-            <div class="progress-wrap" id="progressWrap" aria-hidden="true">
-              <div class="progress-track">
-                <div class="progress-fill"></div>
-              </div>
-              <div class="progress-label" id="progressLabel">토론을 시작하는 중...</div>
-            </div>
-            <div class="error" id="errorText"></div>
-          </div>
-
           <div class="discussion-head">
             <h2>토론 타임라인</h2>
             <div class="turn-meta" id="turnMeta">0 턴</div>
           </div>
+
           <div class="debate-window" id="debateWindow" aria-live="polite">
             <div class="placeholder">아직 실행된 토론이 없습니다. 주제를 입력하고 실행해 주세요.</div>
+          </div>
+
+          <div class="controls">
+            <div class="progress-wrap" id="progressWrap" aria-hidden="true">
+              <div class="progress-track">
+                <div class="progress-fill"></div>
+              </div>
+            </div>
+            <div class="compose-box">
+              <textarea id="problem" placeholder="토론하고 싶은 주제를 입력하세요..." aria-label="토론 주제"></textarea>
+              <div class="control-row">
+                <div class="meta" id="statusText">대기 중</div>
+                <div class="action-buttons">
+                  <button id="runBtn">토론 실행</button>
+                  <button id="stopBtn" disabled>토론 중지</button>
+                </div>
+              </div>
+            </div>
+            <div class="error" id="errorText"></div>
           </div>
         </section>
       </div>

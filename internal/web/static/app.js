@@ -3,10 +3,10 @@
     const personaListEl = document.getElementById("personaList");
     const problemEl = document.getElementById("problem");
     const runBtn = document.getElementById("runBtn");
+    const stopBtn = document.getElementById("stopBtn");
     const statusText = document.getElementById("statusText");
     const errorText = document.getElementById("errorText");
     const progressWrapEl = document.getElementById("progressWrap");
-    const progressLabelEl = document.getElementById("progressLabel");
     const debateWindowEl = document.getElementById("debateWindow");
     const turnMetaEl = document.getElementById("turnMeta");
 
@@ -24,12 +24,18 @@
     let selectedPersonaPath = "";
     let currentStream = null;
     let turnCount = 0;
+    let stopRequested = false;
     const maxRenderedTurnCards = 320;
 
     function closeCurrentStream() {
       if (!currentStream) return;
       currentStream.close();
       currentStream = null;
+    }
+
+    function setDebateRunning(isRunning) {
+      runBtn.disabled = isRunning;
+      stopBtn.disabled = !isRunning;
     }
 
     function setTurnMeta(count, state) {
@@ -71,7 +77,6 @@
     }
 
     function showProgress(text) {
-      progressLabelEl.textContent = text || "토론 진행 중...";
       progressWrapEl.classList.add("active");
       progressWrapEl.setAttribute("aria-hidden", "false");
     }
@@ -80,6 +85,12 @@
       progressWrapEl.classList.remove("active");
       progressWrapEl.setAttribute("aria-hidden", "true");
     }
+
+    // Auto-resize textarea
+    problemEl.addEventListener("input", function() {
+      this.style.height = "auto";
+      this.style.height = (this.scrollHeight) + "px";
+    });
 
     function hashText(text) {
       const value = String(text || "");
@@ -165,11 +176,6 @@
       personas.forEach((persona, index) => {
         const item = document.createElement("article");
         item.className = "persona-item";
-        item.style.setProperty("--stagger", String(index + 1));
-        item.style.setProperty(
-          "--persona-hue",
-          String(hueFromText(persona.id || persona.name || String(index), index * 11))
-        );
         item.dataset.personaId = persona.id || "";
         item.dataset.personaName = persona.name || "";
 
@@ -179,9 +185,12 @@
         const head = document.createElement("div");
         head.className = "persona-head";
 
+        const hue = hueFromText(persona.id || persona.name || String(index), index * 11);
         const avatar = document.createElement("span");
         avatar.className = "persona-avatar";
         avatar.textContent = initialsFromText(persona.name || persona.id || String(index + 1));
+        avatar.style.backgroundColor = `hsl(${hue}, 60%, 90%)`;
+        avatar.style.color = `hsl(${hue}, 70%, 30%)`;
 
         const role = document.createElement("p");
         role.className = "persona-role";
@@ -203,12 +212,24 @@
     function createTurnCard(type, badge, name, content) {
       const card = document.createElement("article");
       card.className = "turn-card " + type;
+
+      // Determine colors based on type
+      let hue = 0;
+      let sat = 0;
+      let light = 95;
+      
       if (type === "turn-persona") {
-        card.style.setProperty("--speaker-hue", String(hueFromText(name)));
+        hue = hueFromText(name);
+        sat = 60;
+        light = 90;
       } else if (type === "turn-system") {
-        card.style.setProperty("--speaker-hue", "166");
+        hue = 160; // Green-ish
+        sat = 0; // Gray
+        light = 92;
       } else if (type === "turn-summary") {
-        card.style.setProperty("--speaker-hue", "219");
+        hue = 210; // Blue
+        sat = 80;
+        light = 95;
       }
 
       const head = document.createElement("div");
@@ -221,10 +242,16 @@
       avatarEl.className = "turn-avatar";
       if (type === "turn-system") {
         avatarEl.textContent = "S";
+        avatarEl.style.backgroundColor = "#e5e5ea";
+        avatarEl.style.color = "#8e8e93";
       } else if (type === "turn-summary") {
         avatarEl.textContent = "R";
+        avatarEl.style.backgroundColor = "#e0f2fe";
+        avatarEl.style.color = "#0369a1";
       } else {
         avatarEl.textContent = initialsFromText(name);
+        avatarEl.style.backgroundColor = `hsl(${hue}, ${sat}%, ${light}%)`;
+        avatarEl.style.color = `hsl(${hue}, 70%, 30%)`;
       }
 
       const badgeEl = document.createElement("span");
@@ -291,7 +318,8 @@
     async function runDebate() {
       errorText.textContent = "";
       statusText.textContent = "토론 실행 중...";
-      runBtn.disabled = true;
+      setDebateRunning(true);
+      stopRequested = false;
       showProgress("토론을 시작하는 중...");
       closeCurrentStream();
 
@@ -314,6 +342,9 @@
         let finished = false;
 
         stream.addEventListener("start", function (ev) {
+          if (finished || stopRequested) {
+            return;
+          }
           const payload = parseJSON(ev.data) || {};
           clearDebateWindow();
           setTurnMeta(0, "진행 중");
@@ -327,6 +358,9 @@
         });
 
         stream.addEventListener("turn", function (ev) {
+          if (finished || stopRequested) {
+            return;
+          }
           const turn = parseJSON(ev.data);
           if (!turn) {
             return;
@@ -344,7 +378,7 @@
         });
 
         stream.addEventListener("complete", function (ev) {
-          if (finished) {
+          if (finished || stopRequested) {
             return;
           }
           finished = true;
@@ -363,13 +397,13 @@
           clearActivePersona();
           setTurnMeta(turnCount, "완료");
           statusText.textContent = "완료";
-          runBtn.disabled = false;
+          setDebateRunning(false);
           hideProgress();
           closeCurrentStream();
         });
 
         stream.addEventListener("debate_error", function (ev) {
-          if (finished) {
+          if (finished || stopRequested) {
             return;
           }
           finished = true;
@@ -378,13 +412,13 @@
           statusText.textContent = "실패";
           clearActivePersona();
           setTurnMeta(turnCount, "실패");
-          runBtn.disabled = false;
+          setDebateRunning(false);
           hideProgress();
           closeCurrentStream();
         });
 
         stream.onerror = function () {
-          if (finished) {
+          if (finished || stopRequested) {
             return;
           }
           finished = true;
@@ -394,7 +428,7 @@
           statusText.textContent = "실패";
           clearActivePersona();
           setTurnMeta(turnCount, "실패");
-          runBtn.disabled = false;
+          setDebateRunning(false);
           hideProgress();
           closeCurrentStream();
         };
@@ -403,12 +437,28 @@
         statusText.textContent = "실패";
         clearActivePersona();
         setTurnMeta(turnCount, "실패");
-        runBtn.disabled = false;
+        setDebateRunning(false);
         hideProgress();
       }
     }
 
+    function stopDebate() {
+      if (!currentStream) {
+        return;
+      }
+      stopRequested = true;
+      closeCurrentStream();
+      errorText.textContent = "";
+      clearActivePersona();
+      statusText.textContent = "중지됨";
+      setTurnMeta(turnCount, "중지");
+      hideProgress();
+      setDebateRunning(false);
+      appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
+    }
+
     runBtn.addEventListener("click", runDebate);
+    stopBtn.addEventListener("click", stopDebate);
     personaGroupEl.addEventListener("change", async () => {
       try {
         errorText.textContent = "";
@@ -424,4 +474,5 @@
       errorText.textContent = String(err.message || err);
     });
     setTurnMeta(0, "대기");
+    setDebateRunning(false);
     hideProgress();
