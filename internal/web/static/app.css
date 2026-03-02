@@ -484,20 +484,6 @@ select:focus {
   box-shadow: 0 14px 30px rgba(185, 104, 47, 0.18);
 }
 
-.turn-moderator .turn-content::before {
-  content: "사회자 정리";
-  display: inline-block;
-  margin-bottom: 8px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  color: #8b4820;
-  background: var(--amber-100);
-  border: 1px solid rgba(185, 104, 47, 0.25);
-}
-
 .turn-system {
   align-self: center;
 }
