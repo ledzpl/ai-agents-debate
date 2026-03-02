@@ -30,7 +30,8 @@ var markdownEntityReplacer = strings.NewReplacer(
 	">", "&gt;",
 )
 
-var evidenceQualityMetadataLine = regexp.MustCompile(`(?i)^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?$`)
+var evidenceQualityMetadataLine = regexp.MustCompile(`(?i)^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$`)
+var evidenceQualityMetadataInline = regexp.MustCompile(`(?i)\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*`)
 
 func SaveResult(path string, result orchestrator.Result) error {
 	dir := filepath.Dir(path)
@@ -371,16 +372,36 @@ func sanitizeTurnContentForDisplay(content string) string {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	visible := make([]string, 0, len(lines))
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
+		cleaned := stripEvidenceQualityMetadata(line)
+		trimmed := strings.TrimSpace(cleaned)
 		if trimmed == "" {
+			continue
+		}
+		if isListMarkerOnly(trimmed) {
 			continue
 		}
 		if isHiddenDirectiveLine(trimmed) {
 			continue
 		}
-		visible = append(visible, line)
+		visible = append(visible, trimmed)
 	}
 	return strings.TrimSpace(strings.Join(visible, "\n"))
+}
+
+func stripEvidenceQualityMetadata(line string) string {
+	return evidenceQualityMetadataInline.ReplaceAllString(line, "")
+}
+
+func isListMarkerOnly(line string) bool {
+	switch line {
+	case "-", "*", "+":
+		return true
+	}
+	i := 0
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	return i > 0 && i == len(line)-1 && line[i] == '.'
 }
 
 func isHiddenDirectiveLine(line string) bool {

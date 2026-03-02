@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"debate/internal/orchestrator"
@@ -107,7 +108,7 @@ Rules:
 - If a real expert is provided as master_name, use that person's known knowledge from books, papers, and articles as inspiration.
 - When master_name exists, include at least one concrete concept/framework from that body of work in your turn.
 - Do not claim to be the real person, and do not invent specific titles/dates when you are unsure.
-- Include one short self-correction line when your likely persona failure mode could distort this turn:
+- When your likely persona failure mode could distort this turn, include one short self-correction line:
   SELF_CHECK: <likely bias/failure mode> -> <mitigation in this turn>
 - End with one handoff sentence that helps the next speaker advance the debate.
 - End with one line: HANDOFF_ASK: <one concrete question the NEXT speaker must answer>.
@@ -136,9 +137,8 @@ Goal:
 - Prioritize domain fit, decision leverage at turn 1, and ability to frame useful criteria for others.
 Rules:
 - Choose exactly one persona from the provided candidates.
-- Return exactly one JSON object with keys:
+- Return exactly one JSON object with one key:
   - persona_id (string, must match one candidate id exactly)
-  - reason (string, one short sentence)
 - No markdown, no code block, no extra keys, no trailing text.`)
 }
 
@@ -238,7 +238,8 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	b.WriteString("\nInteraction memory snapshot:\n")
 	b.WriteString(buildTurnInteractionSnapshot(input.Turns, input.Speaker, budget))
 
-	upcomingTurnNo := len(input.Turns) + 1
+	personaTurnsSoFar := countPersonaTurns(input.Turns)
+	upcomingTurnNo := personaTurnsSoFar + 1
 	noNewPointStreak := trailingNoNewPointStreak(input.Turns)
 	closeReadiness := summarizeCloseReadiness(input.Turns)
 	issueCheckpointRequired := closeReadiness.unresolvedBlockers > 0 ||
@@ -258,7 +259,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	}
 
 	b.WriteString("\nTurn objective:\n")
-	if len(input.Turns) == 0 {
+	if personaTurnsSoFar == 0 {
 		b.WriteString("- this is the first turn: set decision criteria and one key risk to test.\n")
 		b.WriteString("- propose option A and option B briefly, then state what metric decides between them.\n")
 	} else {
@@ -496,6 +497,7 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 
 func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
+	judgeTurns := trimTurns(input.Turns, budget.judgeRecentLogLimit)
 
 	var b strings.Builder
 	b.WriteString("Problem:\n")
@@ -505,9 +507,11 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 		b.WriteString(participantPromptLine(p) + "\n")
 	}
 	b.WriteString("\nDebate log:\n")
-	for _, t := range trimTurns(input.Turns, budget.judgeRecentLogLimit) {
+	for _, t := range judgeTurns {
 		b.WriteString(fmt.Sprintf("[%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summarizeTurnContent(t.Content, budget.judgeLogSummaryRunes)))
 	}
+	b.WriteString("\nDecision-state snapshot:\n")
+	b.WriteString(buildJudgeDecisionStateSnapshot(judgeTurns))
 	b.WriteString("\nOutput format reminder:\n")
 	b.WriteString("- return one minified JSON object on a single line only.\n")
 	b.WriteString("- key order: reached, score, summary, rationale, open_risks, next_action_owner, next_action_trigger_or_deadline, next_action_success_metric.\n")
@@ -620,62 +624,23 @@ type closeReadinessSummary struct {
 	decideBySignals    int
 }
 
+type issueState struct {
+	issue    string
+	owner    string
+	deadline string
+	blocker  string
+}
+
+type decisionStateSnapshot struct {
+	issues                map[string]issueState
+	hasStandaloneDecideBy bool
+}
+
 func summarizeCloseReadiness(turns []orchestrator.Turn) closeReadinessSummary {
-	type issueState struct {
-		owner    string
-		deadline string
-		blocker  string
-	}
-	states := make(map[string]issueState)
-	anonymousIssueID := 0
-	standaloneDecideBy := 0
-
-	for _, t := range turns {
-		lines := strings.Split(strings.ReplaceAll(t.Content, "\r\n", "\n"), "\n")
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			upper := strings.ToUpper(trimmed)
-			if strings.HasPrefix(upper, "ISSUE_UPDATE:") {
-				payload := strings.TrimSpace(trimmed[len("ISSUE_UPDATE:"):])
-				parts := strings.Split(payload, "|")
-				issue := ""
-				if len(parts) > 0 {
-					issue = strings.TrimSpace(parts[0])
-				}
-				state := issueState{}
-				for _, part := range parts[1:] {
-					segment := strings.TrimSpace(part)
-					lower := strings.ToLower(segment)
-					switch {
-					case strings.HasPrefix(lower, "owner="):
-						state.owner = strings.TrimSpace(segment[len("owner="):])
-					case strings.HasPrefix(lower, "deadline="):
-						state.deadline = strings.TrimSpace(segment[len("deadline="):])
-					case strings.HasPrefix(lower, "decide_by="):
-						state.deadline = strings.TrimSpace(segment[len("decide_by="):])
-					case strings.HasPrefix(lower, "blocker="):
-						state.blocker = strings.TrimSpace(segment[len("blocker="):])
-					}
-				}
-				if issue == "" {
-					anonymousIssueID++
-					issue = fmt.Sprintf("anonymous_issue_%d", anonymousIssueID)
-				}
-				states[strings.ToLower(issue)] = state
-			}
-
-			if strings.Contains(strings.ToLower(trimmed), "decide_by=") {
-				val := strings.TrimSpace(trimmed[strings.Index(strings.ToLower(trimmed), "decide_by=")+len("decide_by="):])
-				if !isPlaceholderValue(val) {
-					// Count additional decision deadlines stated outside ISSUE_UPDATE lines.
-					standaloneDecideBy++
-				}
-			}
-		}
-	}
+	snapshot := extractDecisionStateSnapshot(turns)
 
 	summary := closeReadinessSummary{}
-	for _, state := range states {
+	for _, state := range snapshot.issues {
 		if isOwnerUnassigned(state.owner) {
 			summary.unownedIssues++
 		}
@@ -686,9 +651,141 @@ func summarizeCloseReadiness(turns []orchestrator.Turn) closeReadinessSummary {
 			summary.decideBySignals++
 		}
 	}
-	// Include standalone decide_by signals encountered outside issue updates.
-	summary.decideBySignals += standaloneDecideBy
+	if snapshot.hasStandaloneDecideBy {
+		summary.decideBySignals++
+	}
+	// CLOSE gating only needs presence of a concrete decide_by signal.
+	if summary.decideBySignals > 1 {
+		summary.decideBySignals = 1
+	}
 	return summary
+}
+
+func buildJudgeDecisionStateSnapshot(turns []orchestrator.Turn) string {
+	snapshot := extractDecisionStateSnapshot(turns)
+	var b strings.Builder
+
+	if len(snapshot.issues) == 0 {
+		b.WriteString("- issue registry: none\n")
+	} else {
+		keys := make([]string, 0, len(snapshot.issues))
+		for key := range snapshot.issues {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		b.WriteString("- issue registry:\n")
+		for _, key := range keys {
+			state := snapshot.issues[key]
+			owner := strings.TrimSpace(state.owner)
+			deadline := strings.TrimSpace(state.deadline)
+			blocker := strings.TrimSpace(state.blocker)
+			if owner == "" {
+				owner = "unassigned"
+			}
+			if deadline == "" {
+				deadline = "none"
+			}
+			if blocker == "" {
+				blocker = "none"
+			}
+			b.WriteString(fmt.Sprintf("  - %s: owner=%s; deadline=%s; blocker=%s\n", state.issue, owner, deadline, blocker))
+		}
+	}
+
+	if snapshot.hasStandaloneDecideBy {
+		b.WriteString("- decide_by signal outside issue registry: present\n")
+	} else {
+		b.WriteString("- decide_by signal outside issue registry: none\n")
+	}
+	return b.String()
+}
+
+func extractDecisionStateSnapshot(turns []orchestrator.Turn) decisionStateSnapshot {
+	states := make(map[string]issueState)
+	anonymousIssueID := 0
+	hasStandaloneDecideBy := false
+
+	for _, t := range turns {
+		lines := strings.Split(strings.ReplaceAll(t.Content, "\r\n", "\n"), "\n")
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+
+			upper := strings.ToUpper(trimmed)
+			if strings.HasPrefix(upper, "ISSUE_UPDATE:") {
+				payload := strings.TrimSpace(trimmed[len("ISSUE_UPDATE:"):])
+				applyIssueUpdate(payload, states, &anonymousIssueID)
+				continue
+			}
+
+			if val := extractDirectiveValue(trimmed, "decide_by="); !isPlaceholderValue(val) {
+				hasStandaloneDecideBy = true
+			}
+		}
+	}
+
+	return decisionStateSnapshot{
+		issues:                states,
+		hasStandaloneDecideBy: hasStandaloneDecideBy,
+	}
+}
+
+func applyIssueUpdate(payload string, states map[string]issueState, anonymousIssueID *int) {
+	parts := strings.Split(payload, "|")
+	issue := ""
+	if len(parts) > 0 {
+		issue = strings.TrimSpace(parts[0])
+	}
+	if issue == "" {
+		*anonymousIssueID = *anonymousIssueID + 1
+		issue = fmt.Sprintf("anonymous_issue_%d", *anonymousIssueID)
+	}
+
+	key := strings.ToLower(issue)
+	state, exists := states[key]
+	if !exists {
+		state = issueState{issue: issue}
+	} else if strings.TrimSpace(state.issue) == "" {
+		state.issue = issue
+	}
+
+	for _, part := range parts[1:] {
+		segment := strings.TrimSpace(part)
+		lower := strings.ToLower(segment)
+		switch {
+		case strings.HasPrefix(lower, "owner="):
+			state.owner = strings.TrimSpace(segment[len("owner="):])
+		case strings.HasPrefix(lower, "deadline="):
+			state.deadline = strings.TrimSpace(segment[len("deadline="):])
+		case strings.HasPrefix(lower, "decide_by="):
+			state.deadline = strings.TrimSpace(segment[len("decide_by="):])
+		case strings.HasPrefix(lower, "blocker="):
+			state.blocker = strings.TrimSpace(segment[len("blocker="):])
+		}
+	}
+
+	states[key] = state
+}
+
+func extractDirectiveValue(line string, key string) string {
+	if line == "" || key == "" {
+		return ""
+	}
+	lower := strings.ToLower(line)
+	idx := strings.Index(lower, key)
+	if idx < 0 {
+		return ""
+	}
+	value := strings.TrimSpace(line[idx+len(key):])
+	if value == "" {
+		return ""
+	}
+	if cut := strings.IndexAny(value, "|;,"); cut >= 0 {
+		value = strings.TrimSpace(value[:cut])
+	}
+	return value
 }
 
 func isOwnerUnassigned(owner string) bool {

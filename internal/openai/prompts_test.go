@@ -350,6 +350,7 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 			{Index: 1, SpeakerID: "p1", SpeakerName: "Growth Lead", Type: orchestrator.TurnTypePersona, Content: "빠르게 실험해서 전환 개선을 확인합시다."},
 			{Index: 2, SpeakerID: orchestrator.ModeratorSpeakerID, SpeakerName: orchestrator.ModeratorSpeakerName, Type: orchestrator.TurnTypeModerator, Content: "리스크 가드레일을 포함한 최소 실험안을 제시해 주세요."},
 			{Index: 3, SpeakerID: "p2", SpeakerName: "Risk Analyst", Type: orchestrator.TurnTypePersona, Content: "가드레일 없이 실험하면 리스크가 큽니다."},
+			{Index: 4, SpeakerID: "p1", SpeakerName: "Growth Lead", Type: orchestrator.TurnTypePersona, Content: "속도를 유지하되 블로커 임계치를 명시합시다."},
 		},
 		Speaker: persona.Persona{
 			ID:   "p1",
@@ -392,8 +393,8 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "decision-forcing handoff question") {
 		t.Fatalf("expected decision-forcing handoff objective, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "compare at least two plausible options (A/B)") {
-		t.Fatalf("expected exploration phase option-comparison guidance, prompt=%q", prompt)
+	if !strings.Contains(prompt, "choose one provisional option and include owner + trigger/deadline") {
+		t.Fatalf("expected convergence phase decision guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "without bracket labels like [evidence] or [inference]") {
 		t.Fatalf("expected anti-labeling guidance in turn objective, prompt=%q", prompt)
@@ -663,5 +664,92 @@ func TestDebatePhaseSwitchesByTurnWindow(t *testing.T) {
 	}
 	if got := debatePhase(6, 3); got != "convergence" {
 		t.Fatalf("expected convergence phase, got %s", got)
+	}
+}
+
+func TestSummarizeCloseReadinessCapsStandaloneDecideBySignals(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "DECISION_CHECK: choose Option A or B; metric_threshold>=2%; decide_by=2026-03-10",
+		},
+		{
+			Index:       2,
+			SpeakerID:   "p2",
+			SpeakerName: "SRE",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "추가 검증 필요. decide_by=2026-03-11",
+		},
+	}
+
+	summary := summarizeCloseReadiness(turns)
+	if summary.decideBySignals != 1 {
+		t.Fatalf("expected capped decide_by signal=1, got %d", summary.decideBySignals)
+	}
+}
+
+func TestSummarizeCloseReadinessMergesIssueUpdatesByIssue(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "ISSUE_UPDATE: payment-rollout | owner=unassigned | deadline=2026-03-15 | blocker=fraud rules",
+		},
+		{
+			Index:       2,
+			SpeakerID:   "p2",
+			SpeakerName: "Risk",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "ISSUE_UPDATE: payment-rollout | owner=risk-lead",
+		},
+	}
+
+	summary := summarizeCloseReadiness(turns)
+	if summary.unownedIssues != 0 {
+		t.Fatalf("expected owner update to clear unowned issue, got %d", summary.unownedIssues)
+	}
+	if summary.unresolvedBlockers != 1 {
+		t.Fatalf("expected blocker state to persist across partial issue updates, got %d", summary.unresolvedBlockers)
+	}
+}
+
+func TestBuildJudgeUserPromptIncludesDecisionStateSnapshot(t *testing.T) {
+	prompt := buildJudgeUserPrompt(orchestrator.JudgeConsensusInput{
+		Problem: "릴리즈 의사결정",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+			{ID: "p2", Name: "Risk", Role: "risk"},
+		},
+		Turns: []orchestrator.Turn{
+			{
+				Index:       1,
+				SpeakerID:   "p1",
+				SpeakerName: "PM",
+				Type:        orchestrator.TurnTypePersona,
+				Content:     "ISSUE_UPDATE: release-window | owner=pm | deadline=2026-03-20 | blocker=none",
+			},
+			{
+				Index:       2,
+				SpeakerID:   "p2",
+				SpeakerName: "Risk",
+				Type:        orchestrator.TurnTypePersona,
+				Content:     "DECISION_CHECK: choose Option A or B; metric_threshold=p95<300ms; decide_by=2026-03-19",
+			},
+		},
+	})
+
+	if !strings.Contains(prompt, "Decision-state snapshot:") {
+		t.Fatalf("expected decision-state snapshot section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "issue registry:") || !strings.Contains(prompt, "release-window: owner=pm; deadline=2026-03-20; blocker=none") {
+		t.Fatalf("expected issue registry summary in judge prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "decide_by signal outside issue registry: present") {
+		t.Fatalf("expected standalone decide_by signal summary in judge prompt, prompt=%q", prompt)
 	}
 }

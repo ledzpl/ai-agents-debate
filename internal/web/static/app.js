@@ -132,21 +132,39 @@
       const lines = String(content || "").split("\n");
       const visible = [];
       for (const line of lines) {
-        const trimmed = String(line || "").trim();
+        const cleaned = stripEvidenceMeta(String(line || ""));
+        const trimmed = cleaned.trim();
         if (!trimmed) {
+          continue;
+        }
+        if (isListMarkerOnly(trimmed)) {
           continue;
         }
         if (isHiddenDirectiveLine(trimmed)) {
           continue;
         }
-        visible.push(line);
+        visible.push(trimmed);
       }
       return visible.join("\n").trim();
     }
 
+    function stripEvidenceMeta(line) {
+      return String(line || "").replace(
+        /\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*/gi,
+        ""
+      );
+    }
+
+    function isListMarkerOnly(line) {
+      if (line === "-" || line === "*" || line === "+") {
+        return true;
+      }
+      return /^[0-9]+\.$/.test(line);
+    }
+
     function isHiddenDirectiveLine(line) {
       const normalizedRaw = normalizeDirectiveCandidate(line);
-      if (/^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?$/i.test(normalizedRaw)) {
+      if (/^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$/i.test(normalizedRaw)) {
         return true;
       }
       const normalized = normalizedRaw.toLowerCase();

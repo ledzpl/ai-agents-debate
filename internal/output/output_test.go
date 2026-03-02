@@ -245,6 +245,7 @@ func TestFormatResultMarkdownHidesDirectiveMetadataLines(t *testing.T) {
 func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 	input := strings.Join([]string{
 		"일반 본문",
+		"중간 판단 (evidence_type=assumption, confidence=medium).",
 		"- issue_update=owner=unassigned",
 		"> meta_delta: changed=ab-test",
 		"- (evidence_type=assumption, confidence=medium)",
@@ -256,7 +257,7 @@ func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 	}, "\n")
 
 	got := sanitizeTurnContentForDisplay(input)
-	want := "일반 본문\n결론 라인"
+	want := "일반 본문\n중간 판단\n결론 라인"
 	if got != want {
 		t.Fatalf("unexpected sanitized content: got %q want %q", got, want)
 	}
