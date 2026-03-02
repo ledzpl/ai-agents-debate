@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -127,6 +128,9 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "technical terms to <=3") {
 		t.Fatalf("expected relaxed technical-term limit guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "language-neutral way") {
+		t.Fatalf("expected language-neutral sentence-length guidance, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "Include one plain-language user-impact sentence") {
 		t.Fatalf("expected user-impact sentence guidance, prompt=%q", prompt)
 	}
@@ -156,6 +160,9 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "ISSUE_UPDATE: <issue>") {
 		t.Fatalf("expected unresolved issue registry guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "ISSUE_UPDATE quality rule") || !strings.Contains(prompt, "no TBD/unknown/later/soon") {
+		t.Fatalf("expected issue-update placeholder guardrail guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Do not emit ISSUE_UPDATE or SELF_CHECK when nothing changed") {
 		t.Fatalf("expected selective metadata emission guidance, prompt=%q", prompt)
@@ -376,6 +383,51 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 	if !strings.Contains(prompt, "next action owner") || !strings.Contains(prompt, "next action success metric") {
 		t.Fatalf("expected structured next action fields in prompt, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "next action decide_by") {
+		t.Fatalf("expected decide_by label in final moderator user prompt, prompt=%q", prompt)
+	}
+}
+
+func TestBuildFinalModeratorUserPromptCompressesLogTailByBudget(t *testing.T) {
+	personas := []persona.Persona{
+		{ID: "p1", Name: "PM", Role: "product"},
+		{ID: "p2", Name: "Risk", Role: "risk"},
+		{ID: "p3", Name: "Data", Role: "analytics"},
+		{ID: "p4", Name: "Ops", Role: "operations"},
+		{ID: "p5", Name: "Eng", Role: "engineering"},
+		{ID: "p6", Name: "Finance", Role: "finance"},
+		{ID: "p7", Name: "Legal", Role: "compliance"},
+		{ID: "p8", Name: "Growth", Role: "growth"},
+		{ID: "p9", Name: "Design", Role: "ux"},
+		{ID: "p10", Name: "SRE", Role: "risk"},
+	}
+	budget := derivePromptBudget(len(personas), 15)
+	totalTurns := budget.judgeRecentLogLimit + 4
+
+	turns := make([]orchestrator.Turn, 0, totalTurns)
+	for i := 1; i <= totalTurns; i++ {
+		turns = append(turns, orchestrator.Turn{
+			Index:       i,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "turn content",
+		})
+	}
+
+	prompt := buildFinalModeratorUserPrompt(orchestrator.GenerateFinalModeratorInput{
+		Problem:   "최종 결정",
+		Personas:  personas,
+		Turns:     turns,
+		Consensus: orchestrator.Consensus{Score: 0.7},
+	})
+
+	if strings.Contains(prompt, "[1][PM][persona]") {
+		t.Fatalf("expected compressed final log tail to drop earliest turns, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, fmt.Sprintf("[%d][PM][persona]", totalTurns)) {
+		t.Fatalf("expected compressed final log tail to keep latest turn, prompt=%q", prompt)
+	}
 }
 
 func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.T) {
@@ -432,7 +484,7 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "decision-forcing handoff question") {
 		t.Fatalf("expected decision-forcing handoff objective, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "choose one provisional option and include owner + trigger/deadline") {
+	if !strings.Contains(prompt, "choose one provisional option and include owner + decide_by") {
 		t.Fatalf("expected convergence phase decision guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "requested audience_mode: general") {
@@ -458,6 +510,9 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	}
 	if !strings.Contains(prompt, "include ISSUE_UPDATE only when opening a new issue or when owner/decide_by/blocker changes") {
 		t.Fatalf("expected conditional issue registry guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "keep decide_by/blocker concrete (no TBD/unknown/later/soon)") {
+		t.Fatalf("expected decide_by/blocker placeholder guardrail in turn objective, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "periodic meta-summary turn") {
 		t.Fatalf("expected periodic meta-summary cadence trigger, prompt=%q", prompt)
@@ -503,7 +558,7 @@ func TestBuildTurnUserPromptConvergenceIncludesDecisionTemplate(t *testing.T) {
 	if !strings.Contains(prompt, "current phase: convergence") {
 		t.Fatalf("expected convergence phase, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "choose one provisional option and include owner + trigger/deadline") {
+	if !strings.Contains(prompt, "choose one provisional option and include owner + decide_by") {
 		t.Fatalf("expected convergence decision template, prompt=%q", prompt)
 	}
 }
@@ -628,8 +683,8 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	if !strings.Contains(prompt, "next_action_trigger_or_deadline") {
 		t.Fatalf("expected next action calibration guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "summary: exactly 1 sentence") || !strings.Contains(prompt, "open_risks: 0-3 items") {
-		t.Fatalf("expected compact output-length and risk-count constraints, prompt=%q", prompt)
+	if !strings.Contains(prompt, "summary: exactly 1 sentence; keep it short in a language-neutral way") || !strings.Contains(prompt, "open_risks: 0-3 items") {
+		t.Fatalf("expected language-neutral compact output-length and risk-count constraints, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "exact order") || !strings.Contains(prompt, "single-line minified JSON object") {
 		t.Fatalf("expected strict json formatting guidance, prompt=%q", prompt)
@@ -637,8 +692,11 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	if !strings.Contains(prompt, "final character must be }") {
 		t.Fatalf("expected json closing brace requirement, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "Never omit required keys") || !strings.Contains(prompt, "next_action_owner: \"unassigned\"") {
-		t.Fatalf("expected fallback placeholder guidance for missing fields, prompt=%q", prompt)
+	if !strings.Contains(prompt, "Never omit required keys") || !strings.Contains(prompt, "next_action_owner: \"moderator\"") {
+		t.Fatalf("expected fallback concrete-default guidance for missing fields, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Avoid placeholder values in next_action fields") {
+		t.Fatalf("expected anti-placeholder next_action guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Self-repair before final output") {
 		t.Fatalf("expected malformed-json self-repair guidance, prompt=%q", prompt)
@@ -673,8 +731,11 @@ func TestBuildJudgeUserPromptIncludesFormatReminder(t *testing.T) {
 	if !strings.Contains(prompt, "key order: reached, score, summary, rationale, open_risks") {
 		t.Fatalf("expected key order guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "never omit keys; if uncertain, use placeholders") {
-		t.Fatalf("expected placeholder fallback reminder, prompt=%q", prompt)
+	if !strings.Contains(prompt, "never omit keys; if uncertain, use conservative concrete defaults") {
+		t.Fatalf("expected concrete-default fallback reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "avoid placeholder values in next_action fields") {
+		t.Fatalf("expected anti-placeholder reminder, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "type constraints: reached is boolean, score is numeric 0..1") {
 		t.Fatalf("expected type constraint reminder, prompt=%q", prompt)
@@ -748,8 +809,11 @@ func TestBuildFinalModeratorSystemPromptIsDecisionOriented(t *testing.T) {
 	if !strings.Contains(prompt, "what/who/when format") {
 		t.Fatalf("expected concrete what/who/when action guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "Avoid unexplained acronyms/jargon") {
-		t.Fatalf("expected anti-jargon guidance in final moderator prompt, prompt=%q", prompt)
+	if !strings.Contains(prompt, "audience_mode=general, avoid unexplained acronyms/jargon") {
+		t.Fatalf("expected general-mode anti-jargon guidance in final moderator prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "audience_mode=expert, precise terminology is allowed") {
+		t.Fatalf("expected expert-mode terminology allowance in final moderator prompt, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Do not introduce new facts beyond the provided debate and judge context") {
 		t.Fatalf("expected no-new-facts guardrail in final moderator prompt, prompt=%q", prompt)
@@ -855,6 +919,63 @@ func TestSummarizeCloseReadinessCapsStandaloneDecideBySignals(t *testing.T) {
 	summary := summarizeCloseReadiness(turns)
 	if summary.decideBySignals != 1 {
 		t.Fatalf("expected capped decide_by signal=1, got %d", summary.decideBySignals)
+	}
+}
+
+func TestSummarizeCloseReadinessIgnoresPlaceholderDecideBySignals(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "DECISION_CHECK: choose Option A or B; metric_threshold>=2%; decide_by=later",
+		},
+		{
+			Index:       2,
+			SpeakerID:   "p2",
+			SpeakerName: "SRE",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "추가 검증 필요. decide_by=미정",
+		},
+		{
+			Index:       3,
+			SpeakerID:   "p3",
+			SpeakerName: "Risk",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "리스크 검토 후 공유. deadline=soon",
+		},
+	}
+
+	summary := summarizeCloseReadiness(turns)
+	if summary.decideBySignals != 0 {
+		t.Fatalf("expected placeholder decide_by/deadline values to be ignored, got %d", summary.decideBySignals)
+	}
+}
+
+func TestSummarizeCloseReadinessCountsStandaloneDeadlineDirective(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "DECISION_CHECK: choose Option A or B; metric_threshold>=2%; deadline=2026-03-12",
+		},
+	}
+
+	summary := summarizeCloseReadiness(turns)
+	if summary.decideBySignals != 1 {
+		t.Fatalf("expected standalone deadline signal to count as decide_by signal, got %d", summary.decideBySignals)
+	}
+}
+
+func TestExtractDirectiveValueRequiresDirectiveBoundary(t *testing.T) {
+	if got := extractDirectiveValue("context not_decide_by=2026-03-10", "decide_by="); got != "" {
+		t.Fatalf("expected no extraction from embedded token, got %q", got)
+	}
+	if got := extractDirectiveValue("context not_decide_by=2026-03-10; decide_by=2026-03-11", "decide_by="); got != "2026-03-11" {
+		t.Fatalf("expected extraction from explicit directive token, got %q", got)
 	}
 }
 

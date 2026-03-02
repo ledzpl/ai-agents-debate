@@ -15,6 +15,8 @@ const (
 	turnPromptLogSummaryRunes     = 180
 	moderatorPromptLogSummaryRune = 200
 	judgePromptLogSummaryRunes    = 220
+	issuePlaceholderGuardrail     = "no TBD/unknown/later/soon"
+	nextActionPlaceholderRule     = "no TBD/unknown/later/soon/next cycle"
 )
 
 type promptBudget struct {
@@ -82,7 +84,7 @@ Rules:
 - Adapt explanation depth to audience_mode from the user prompt (general|expert).
 - If audience_mode=general, prefer everyday words and keep technical terms to <=3 with one short parenthetical explanation each.
 - If audience_mode=expert, use precise technical language when useful, but keep it concise and readable.
-- Keep each narrative sentence short (target <=25 words).
+- Keep each narrative sentence short in a language-neutral way (roughly one to two clauses; for long scripts, target <=80 characters).
 - Structure your turn as: core claim -> reason/mechanism -> practical implication.
 - Each turn body must include: one claim, one reason/mechanism, and one verification condition (metric, trigger, or falsifier).
 - Include one plain-language user-impact sentence (why this matters to a general user).
@@ -93,6 +95,7 @@ Rules:
 - Do not translate or rename machine control labels; keep exact uppercase ASCII labels (ISSUE_UPDATE, META_DELTA, SELF_CHECK, OPTION_A, OPTION_B, HANDOFF_ASK, NEXT, CLOSE, NEW_POINT).
 - Include one unresolved-issue registry line when opening a new issue or when owner/decide_by/blocker changed:
   ISSUE_UPDATE: <issue> | owner=<id/name or unassigned> | decide_by=<date/trigger> | blocker=<none or blocker>
+- ISSUE_UPDATE quality rule: owner may be unassigned, but decide_by and blocker must be concrete non-placeholder values (no TBD/unknown/later/soon).
 - Do not emit ISSUE_UPDATE or SELF_CHECK when nothing changed and no checkpoint is requested.
 - Keep the debate interactive: explicitly connect to one named speaker's prior claim (agree, refine, or challenge).
 - If a moderator question/request is provided, answer it in your first sentence before expanding.
@@ -263,7 +266,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	} else {
 		b.WriteString("- objective: compress options, force decisions, and close open risks.\n")
 		b.WriteString("- prioritize explicit tradeoff choices, owners, and triggers.\n")
-		b.WriteString("- output expectation: choose one provisional option and include owner + trigger/deadline for immediate next action.\n")
+		b.WriteString("- output expectation: choose one provisional option and include owner + decide_by for immediate next action.\n")
 	}
 
 	b.WriteString("\nInteraction memory snapshot:\n")
@@ -317,8 +320,10 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	}
 	if issueCheckpointRequired {
 		b.WriteString("- issue-state checkpoint required now: include ISSUE_UPDATE: <issue> | owner=<...> | decide_by=<...> | blocker=<...>.\n")
+		b.WriteString("- in ISSUE_UPDATE now, avoid placeholders for decide_by/blocker (no TBD/unknown/later/soon).\n")
 	} else {
 		b.WriteString("- include ISSUE_UPDATE only when opening a new issue or when owner/decide_by/blocker changes (lightweight cadence, not every turn).\n")
+		b.WriteString("- when ISSUE_UPDATE is emitted, keep decide_by/blocker concrete (no TBD/unknown/later/soon).\n")
 	}
 	if noNewPointStreak >= 2 {
 		b.WriteString("- deadlock mode required now: apply the system deadlock breaker (OPTION_A/OPTION_B table).\n")
@@ -359,13 +364,14 @@ Judging rules:
   - next_action_trigger_or_deadline: when it must run (trigger or deadline)
   - next_action_success_metric: how completion/success is verified
 - When reached=false, these next action fields must still be concrete and executable within one cycle.
-- Never omit required keys. If uncertain, still fill conservative non-empty placeholders:
-  - next_action_owner: "unassigned"
-  - next_action_trigger_or_deadline: "next cycle"
-  - next_action_success_metric: "completion criteria documented"
+- Never omit required keys. If uncertain, still fill conservative concrete defaults:
+  - next_action_owner: "moderator"
+  - next_action_trigger_or_deadline: "within 7 days"
+  - next_action_success_metric: "owner and deadline documented"
+- Avoid placeholder values in next_action fields (no TBD/unknown/later/soon/next cycle).
 - Keep output compact:
-  - summary: exactly 1 sentence, <= 24 words.
-  - rationale: 1-2 short sentences, <= 45 words total.
+  - summary: exactly 1 sentence; keep it short in a language-neutral way (roughly <=24 words or <=120 chars).
+  - rationale: 1-2 short sentences; keep total length compact in a language-neutral way (roughly <=45 words or <=220 chars).
   - open_risks: 0-3 items, each <= 8 words.
 Return exactly one JSON object with keys (in this exact order):
 - reached (boolean)
@@ -379,7 +385,7 @@ Return exactly one JSON object with keys (in this exact order):
 - Output format must be a single-line minified JSON object (no newline characters).
 - JSON type constraints: reached must be unquoted true/false; score must be numeric 0..1 (not string, not percent); open_risks must be a JSON array.
 - Keys and string values must use standard JSON double quotes.
-- JSON template: {"reached":false,"score":0.0,"summary":"...","rationale":"...","open_risks":[],"next_action_owner":"unassigned","next_action_trigger_or_deadline":"next cycle","next_action_success_metric":"completion criteria documented"}
+- JSON template: {"reached":false,"score":0.0,"summary":"...","rationale":"...","open_risks":[],"next_action_owner":"moderator","next_action_trigger_or_deadline":"within 7 days","next_action_success_metric":"owner and deadline documented"}
 - Self-repair before final output: if your draft is malformed/truncated or has missing keys, rewrite once and return only valid JSON.
 - No markdown/code fence, no commentary, no trailing comma, no extra keys, and the final character must be }.`)
 }
@@ -504,7 +510,8 @@ Rules:
 - First sentence must be a plain-language verdict that non-experts can understand immediately.
 - Include: key agreements, unresolved risks, and a practical next-step recommendation.
 - Include one concrete action sentence in what/who/when format.
-- Avoid unexplained acronyms/jargon; if unavoidable, add short parenthetical definitions.
+- If audience_mode=general, avoid unexplained acronyms/jargon; if unavoidable, add short parenthetical definitions.
+- If audience_mode=expert, precise terminology is allowed; define only high-impact terms when ambiguity risk is high.
 - Do not introduce new facts beyond the provided debate and judge context; if uncertain, state uncertainty briefly.
 - Incorporate the consensus score/rationale as confidence calibration (without repeating raw JSON).
 - End with one clear decision-oriented concluding sentence.
@@ -513,6 +520,7 @@ Rules:
 
 func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInput) string {
 	audienceMode := normalizePromptAudienceMode(input.AudienceMode)
+	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
 
 	var b strings.Builder
 	b.WriteString("Problem:\n")
@@ -549,7 +557,7 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 		b.WriteString("- next action owner: " + strings.TrimSpace(input.Consensus.NextActionOwner) + "\n")
 	}
 	if strings.TrimSpace(input.Consensus.NextActionTrigger) != "" {
-		b.WriteString("- next action trigger/deadline: " + strings.TrimSpace(input.Consensus.NextActionTrigger) + "\n")
+		b.WriteString("- next action decide_by: " + strings.TrimSpace(input.Consensus.NextActionTrigger) + "\n")
 	}
 	if strings.TrimSpace(input.Consensus.NextActionSuccessMetric) != "" {
 		b.WriteString("- next action success metric: " + strings.TrimSpace(input.Consensus.NextActionSuccessMetric) + "\n")
@@ -559,8 +567,8 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 	}
 
 	b.WriteString("\nDebate log tail:\n")
-	for _, t := range trimTurns(input.Turns, 20) {
-		b.WriteString(fmt.Sprintf("[%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summarizeTurnContent(t.Content, moderatorPromptLogSummaryRune)))
+	for _, t := range trimTurns(input.Turns, budget.judgeRecentLogLimit) {
+		b.WriteString(fmt.Sprintf("[%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summarizeTurnContent(t.Content, budget.moderatorLogSummaryRunes)))
 	}
 	b.WriteString("\nNow provide the final moderator wrap-up and overall assessment.")
 	return b.String()
@@ -594,7 +602,8 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	b.WriteString("\nOutput format reminder:\n")
 	b.WriteString("- return one minified JSON object on a single line only.\n")
 	b.WriteString("- key order: reached, score, summary, rationale, open_risks, next_action_owner, next_action_trigger_or_deadline, next_action_success_metric.\n")
-	b.WriteString("- never omit keys; if uncertain, use placeholders: next_action_owner=\"unassigned\", next_action_trigger_or_deadline=\"next cycle\", next_action_success_metric=\"completion criteria documented\".\n")
+	b.WriteString("- never omit keys; if uncertain, use conservative concrete defaults: next_action_owner=\"moderator\", next_action_trigger_or_deadline=\"within 7 days\", next_action_success_metric=\"owner and deadline documented\".\n")
+	b.WriteString("- avoid placeholder values in next_action fields (no TBD/unknown/later/soon/next cycle).\n")
 	b.WriteString("- type constraints: reached is boolean, score is numeric 0..1 (not percent/string), open_risks is an array (use []).\n")
 	b.WriteString("- no markdown/code fence, and the final character must be }.\n")
 	return b.String()
@@ -828,6 +837,10 @@ func extractDecisionStateSnapshot(turns []orchestrator.Turn) decisionStateSnapsh
 
 			if val := extractDirectiveValue(trimmed, "decide_by="); !isPlaceholderValue(val) {
 				hasStandaloneDecideBy = true
+				continue
+			}
+			if val := extractDirectiveValue(trimmed, "deadline="); !isPlaceholderValue(val) {
+				hasStandaloneDecideBy = true
 			}
 		}
 	}
@@ -879,19 +892,31 @@ func extractDirectiveValue(line string, key string) string {
 	if line == "" || key == "" {
 		return ""
 	}
-	lower := strings.ToLower(line)
-	idx := strings.Index(lower, key)
-	if idx < 0 {
-		return ""
+	lowerLine := strings.ToLower(line)
+	lowerKey := strings.ToLower(key)
+	searchFrom := 0
+	for {
+		relative := strings.Index(lowerLine[searchFrom:], lowerKey)
+		if relative < 0 {
+			return ""
+		}
+		idx := searchFrom + relative
+		if idx > 0 {
+			prev := lowerLine[idx-1]
+			if isDirectiveTokenChar(prev) {
+				searchFrom = idx + 1
+				continue
+			}
+		}
+		value := strings.TrimSpace(line[idx+len(key):])
+		if value == "" {
+			return ""
+		}
+		if cut := strings.IndexAny(value, "|;,"); cut >= 0 {
+			value = strings.TrimSpace(value[:cut])
+		}
+		return value
 	}
-	value := strings.TrimSpace(line[idx+len(key):])
-	if value == "" {
-		return ""
-	}
-	if cut := strings.IndexAny(value, "|;,"); cut >= 0 {
-		value = strings.TrimSpace(value[:cut])
-	}
-	return value
 }
 
 func isOwnerUnassigned(owner string) bool {
@@ -906,7 +931,29 @@ func isNoBlocker(blocker string) bool {
 
 func isPlaceholderValue(v string) bool {
 	value := strings.ToLower(strings.TrimSpace(v))
-	return value == "" || value == "none" || value == "n/a" || value == "na" || value == "tbd" || value == "unknown" || value == "-"
+	return value == "" ||
+		value == "none" ||
+		value == "n/a" ||
+		value == "na" ||
+		value == "tbd" ||
+		value == "tba" ||
+		value == "unknown" ||
+		value == "pending" ||
+		value == "later" ||
+		value == "soon" ||
+		value == "next cycle" ||
+		value == "미정" ||
+		value == "추후" ||
+		value == "나중" ||
+		value == "곧" ||
+		value == "-"
+}
+
+func isDirectiveTokenChar(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') ||
+		(ch >= '0' && ch <= '9') ||
+		ch == '_' ||
+		ch == '-'
 }
 
 func derivePersonaFailureMode(p persona.Persona) string {
