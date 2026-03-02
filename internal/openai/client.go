@@ -18,6 +18,7 @@ const (
 	finalModeratorMaxOutputToken = 360
 	judgeMaxOutputTokens         = 320
 	judgeRetryMaxOutputTokens    = 512
+	judgeTruncationRetryMaxToken = 800
 	openingSpeakerMaxOutputToken = 180
 )
 
@@ -164,14 +165,20 @@ func (c *Client) JudgeConsensus(ctx context.Context, input orchestrator.JudgeCon
 	userPrompt := buildJudgeUserPrompt(input)
 
 	var aggregated orchestrator.Usage
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		maxOutputTokens := judgeMaxOutputTokens
-		if attempt > 0 {
+		if attempt == 1 {
 			maxOutputTokens = judgeRetryMaxOutputTokens
 		}
+		if attempt == 2 {
+			maxOutputTokens = judgeTruncationRetryMaxToken
+		}
 		currentUserPrompt := userPrompt
-		if attempt > 0 {
+		if attempt == 1 {
 			currentUserPrompt += "\n\nReturn only one minified JSON object on a single line. No markdown/code fence."
+		}
+		if attempt == 2 {
+			currentUserPrompt += "\n\nYour previous response was truncated. Return one complete minified JSON object on a single line, and ensure it ends with `}`. No markdown/code fence."
 		}
 		resp, err := c.callResponses(ctx, []inputMsg{
 			makeMessage("system", systemPrompt),
@@ -191,7 +198,10 @@ func (c *Client) JudgeConsensus(ctx context.Context, input orchestrator.JudgeCon
 		if parseErr == nil {
 			return orchestrator.JudgeConsensusOutput{Consensus: parsed, Usage: aggregated}, nil
 		}
-		if attempt == 1 {
+		if attempt == 2 {
+			return orchestrator.JudgeConsensusOutput{}, fmt.Errorf("parse consensus json: %w", parseErr)
+		}
+		if attempt == 1 && !looksLikeTruncatedJSON(raw, parseErr, usage.CompletionTokens, maxOutputTokens) {
 			return orchestrator.JudgeConsensusOutput{}, fmt.Errorf("parse consensus json: %w", parseErr)
 		}
 	}
@@ -308,4 +318,29 @@ func looksLikeTruncatedText(text string, completionTokens int, maxOutputTokens i
 		}
 	}
 	return true
+}
+
+func looksLikeTruncatedJSON(raw string, parseErr error, completionTokens int, maxOutputTokens int) bool {
+	if parseErr == nil {
+		return false
+	}
+	errText := strings.ToLower(strings.TrimSpace(parseErr.Error()))
+	if strings.Contains(errText, "unexpected end of json input") {
+		return true
+	}
+
+	cleaned := strings.TrimSpace(stripCodeFence(raw))
+	if cleaned == "" {
+		return true
+	}
+	if maxOutputTokens <= 0 || completionTokens < maxOutputTokens-6 {
+		return false
+	}
+	if strings.HasPrefix(cleaned, "{") && !strings.HasSuffix(cleaned, "}") {
+		return true
+	}
+	if strings.Contains(cleaned, "{") && len(extractJSONObjectCandidates(cleaned)) == 0 {
+		return true
+	}
+	return false
 }

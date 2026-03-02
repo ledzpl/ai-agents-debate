@@ -54,12 +54,15 @@ type Turn struct {
 }
 
 type Consensus struct {
-	Reached            bool     `json:"reached"`
-	Score              float64  `json:"score"`
-	Summary            string   `json:"summary"`
-	Rationale          string   `json:"rationale"`
-	OpenRisks          []string `json:"open_risks,omitempty"`
-	RequiredNextAction string   `json:"required_next_action,omitempty"`
+	Reached                 bool     `json:"reached"`
+	Score                   float64  `json:"score"`
+	Summary                 string   `json:"summary"`
+	Rationale               string   `json:"rationale"`
+	OpenRisks               []string `json:"open_risks,omitempty"`
+	NextActionOwner         string   `json:"next_action_owner,omitempty"`
+	NextActionTrigger       string   `json:"next_action_trigger_or_deadline,omitempty"`
+	NextActionSuccessMetric string   `json:"next_action_success_metric,omitempty"`
+	RequiredNextAction      string   `json:"required_next_action,omitempty"`
 }
 
 type Metrics struct {

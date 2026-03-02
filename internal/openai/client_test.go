@@ -3,7 +3,7 @@ package openai
 import "testing"
 
 func TestParseConsensus(t *testing.T) {
-	raw := "```json\n{\"reached\":true,\"score\":0.82,\"summary\":\"Team aligned\",\"rationale\":\"Most concerns resolved\",\"open_risks\":[\"monitor latency\"],\"required_next_action\":\"SRE to define rollback trigger by tomorrow\"}\n```"
+	raw := "```json\n{\"reached\":true,\"score\":0.82,\"summary\":\"Team aligned\",\"rationale\":\"Most concerns resolved\",\"open_risks\":[\"monitor latency\"],\"next_action_owner\":\"SRE\",\"next_action_trigger_or_deadline\":\"by tomorrow EOD\",\"next_action_success_metric\":\"rollback trigger doc published\"}\n```"
 	consensus, err := parseConsensus(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -20,8 +20,17 @@ func TestParseConsensus(t *testing.T) {
 	if len(consensus.OpenRisks) != 1 || consensus.OpenRisks[0] != "monitor latency" {
 		t.Fatalf("unexpected open_risks: %#v", consensus.OpenRisks)
 	}
+	if consensus.NextActionOwner != "SRE" {
+		t.Fatalf("unexpected next_action_owner: %s", consensus.NextActionOwner)
+	}
+	if consensus.NextActionTrigger != "by tomorrow EOD" {
+		t.Fatalf("unexpected next_action_trigger_or_deadline: %s", consensus.NextActionTrigger)
+	}
+	if consensus.NextActionSuccessMetric != "rollback trigger doc published" {
+		t.Fatalf("unexpected next_action_success_metric: %s", consensus.NextActionSuccessMetric)
+	}
 	if consensus.RequiredNextAction == "" {
-		t.Fatal("expected required_next_action to be parsed")
+		t.Fatal("expected required_next_action to be composed")
 	}
 }
 
@@ -40,14 +49,14 @@ func TestParseConsensusMissingRequiredKey(t *testing.T) {
 }
 
 func TestParseConsensusMissingRationale(t *testing.T) {
-	_, err := parseConsensus(`{"reached":true,"score":0.9,"summary":"ok","open_risks":[],"required_next_action":"owner action"}`)
+	_, err := parseConsensus(`{"reached":true,"score":0.9,"summary":"ok","open_risks":[],"next_action_owner":"pm","next_action_trigger_or_deadline":"today","next_action_success_metric":"ticket created"}`)
 	if err == nil {
 		t.Fatal("expected missing rationale error")
 	}
 }
 
 func TestParseConsensusMissingOpenRisks(t *testing.T) {
-	_, err := parseConsensus(`{"reached":true,"score":0.9,"summary":"ok","rationale":"x","required_next_action":"owner action"}`)
+	_, err := parseConsensus(`{"reached":true,"score":0.9,"summary":"ok","rationale":"x","next_action_owner":"pm","next_action_trigger_or_deadline":"today","next_action_success_metric":"ticket created"}`)
 	if err == nil {
 		t.Fatal("expected missing open_risks error")
 	}
@@ -56,12 +65,12 @@ func TestParseConsensusMissingOpenRisks(t *testing.T) {
 func TestParseConsensusMissingRequiredNextAction(t *testing.T) {
 	_, err := parseConsensus(`{"reached":true,"score":0.9,"summary":"ok","rationale":"x","open_risks":[]}`)
 	if err == nil {
-		t.Fatal("expected missing required_next_action error")
+		t.Fatal("expected missing next action error")
 	}
 }
 
 func TestParseConsensusPicksFirstBalancedJSONObject(t *testing.T) {
-	raw := `prefix {"reached":true,"score":0.91,"summary":"ok","rationale":"uses {brace} in text","open_risks":["handoff"],"required_next_action":"PM decides option A today"} trailing {"ignored":true}`
+	raw := `prefix {"reached":true,"score":0.91,"summary":"ok","rationale":"uses {brace} in text","open_risks":["handoff"],"next_action_owner":"PM","next_action_trigger_or_deadline":"today","next_action_success_metric":"option A selected"} trailing {"ignored":true}`
 	consensus, err := parseConsensus(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,7 +87,7 @@ func TestParseConsensusPicksFirstBalancedJSONObject(t *testing.T) {
 }
 
 func TestParseConsensusSkipsInvalidLeadingJSONObject(t *testing.T) {
-	raw := `{"meta":true} {"reached":true,"score":0.67,"summary":"usable","rationale":"fallback object","open_risks":[],"required_next_action":"owner assigns next step"}`
+	raw := `{"meta":true} {"reached":true,"score":0.67,"summary":"usable","rationale":"fallback object","open_risks":[],"next_action_owner":"owner","next_action_trigger_or_deadline":"this cycle","next_action_success_metric":"next step assigned"}`
 	consensus, err := parseConsensus(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -89,7 +98,7 @@ func TestParseConsensusSkipsInvalidLeadingJSONObject(t *testing.T) {
 }
 
 func TestParseConsensusOpenRisksAcceptsDelimitedString(t *testing.T) {
-	raw := `{"reached":false,"score":0.6,"summary":"partial","rationale":"risk gap","open_risks":"risk-a, risk-b","required_next_action":"assign owner"}`
+	raw := `{"reached":false,"score":0.6,"summary":"partial","rationale":"risk gap","open_risks":"risk-a, risk-b","next_action_owner":"ops","next_action_trigger_or_deadline":"before launch","next_action_success_metric":"owner assigned"}`
 	consensus, err := parseConsensus(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -100,7 +109,7 @@ func TestParseConsensusOpenRisksAcceptsDelimitedString(t *testing.T) {
 }
 
 func TestParseConsensusRejectsInvalidOpenRisksType(t *testing.T) {
-	raw := `{"reached":false,"score":0.6,"summary":"partial","rationale":"risk gap","open_risks":{"a":"b"},"required_next_action":"assign owner"}`
+	raw := `{"reached":false,"score":0.6,"summary":"partial","rationale":"risk gap","open_risks":{"a":"b"},"next_action_owner":"ops","next_action_trigger_or_deadline":"before launch","next_action_success_metric":"owner assigned"}`
 	_, err := parseConsensus(raw)
 	if err == nil {
 		t.Fatal("expected invalid open_risks type error")
@@ -108,13 +117,24 @@ func TestParseConsensusRejectsInvalidOpenRisksType(t *testing.T) {
 }
 
 func TestParseConsensusFromCodeFenceWithoutLanguage(t *testing.T) {
-	raw := "```\n{\"reached\":true,\"score\":0.8,\"summary\":\"ok\",\"rationale\":\"done\",\"open_risks\":[],\"required_next_action\":\"owner does next\"}\n```"
+	raw := "```\n{\"reached\":true,\"score\":0.8,\"summary\":\"ok\",\"rationale\":\"done\",\"open_risks\":[],\"next_action_owner\":\"pm\",\"next_action_trigger_or_deadline\":\"today\",\"next_action_success_metric\":\"action logged\"}\n```"
 	consensus, err := parseConsensus(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if consensus.Summary != "ok" {
 		t.Fatalf("unexpected summary: %s", consensus.Summary)
+	}
+}
+
+func TestParseConsensusLegacyRequiredNextActionStillAccepted(t *testing.T) {
+	raw := `{"reached":true,"score":0.88,"summary":"legacy","rationale":"fallback compatibility","open_risks":[],"required_next_action":"owner assigns task by EOD"}`
+	consensus, err := parseConsensus(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if consensus.RequiredNextAction == "" {
+		t.Fatal("expected legacy required_next_action to be kept")
 	}
 }
 

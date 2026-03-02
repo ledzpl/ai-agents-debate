@@ -130,18 +130,75 @@
 
     function sanitizeTurnContent(content) {
       const lines = String(content || "").split("\n");
-      while (lines.length > 0 && !lines[lines.length - 1].trim()) {
-        lines.pop();
-      }
-      while (lines.length > 0) {
-        const tail = lines[lines.length - 1].trim();
-        if (/^handoff_ask\s*[:=]/i.test(tail) || /^next\s*[:=]/i.test(tail) || /^close\s*[:=]/i.test(tail) || /^new[_-]?point\s*[:=]/i.test(tail)) {
-          lines.pop();
+      const visible = [];
+      for (const line of lines) {
+        const trimmed = String(line || "").trim();
+        if (!trimmed) {
           continue;
         }
-        break;
+        if (isHiddenDirectiveLine(trimmed)) {
+          continue;
+        }
+        visible.push(line);
       }
-      return lines.join("\n").trim();
+      return visible.join("\n").trim();
+    }
+
+    function isHiddenDirectiveLine(line) {
+      const normalizedRaw = normalizeDirectiveCandidate(line);
+      if (/^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?$/i.test(normalizedRaw)) {
+        return true;
+      }
+      const normalized = normalizedRaw.toLowerCase();
+      return hasDirectivePrefix(normalized, "handoff_ask") ||
+        hasDirectivePrefix(normalized, "next") ||
+        hasDirectivePrefix(normalized, "close") ||
+        hasDirectivePrefix(normalized, "new_point") ||
+        hasDirectivePrefix(normalized, "new-point") ||
+        hasDirectivePrefix(normalized, "issue_update") ||
+        hasDirectivePrefix(normalized, "meta_delta") ||
+        hasDirectivePrefix(normalized, "self_check") ||
+        hasDirectivePrefix(normalized, "option_a") ||
+        hasDirectivePrefix(normalized, "option_b") ||
+        hasDirectivePrefix(normalized, "scorecard") ||
+        hasDirectivePrefix(normalized, "scorecard_reason");
+    }
+
+    function hasDirectivePrefix(line, key) {
+      if (!line.startsWith(key)) {
+        return false;
+      }
+      const rest = line.slice(key.length).trimStart();
+      return rest.startsWith(":") || rest.startsWith("=") || rest.startsWith("：");
+    }
+
+    function normalizeDirectiveCandidate(line) {
+      let value = String(line || "").trim();
+      while (value) {
+        const prev = value;
+        value = value.trim();
+
+        if (value.startsWith(">")) {
+          value = value.slice(1).trim();
+        }
+
+        const lower = value.toLowerCase();
+        if (lower.startsWith("- [ ] ") || lower.startsWith("- [x] ")) {
+          value = value.slice(6).trim();
+        } else if (/^[-*+]\s+/.test(value)) {
+          value = value.replace(/^[-*+]\s+/, "").trim();
+        } else {
+          const match = value.match(/^\d+\.\s+/);
+          if (match) {
+            value = value.slice(match[0].length).trim();
+          }
+        }
+
+        if (value === prev) {
+          break;
+        }
+      }
+      return value;
     }
 
     async function fetchPersonas(path) {
@@ -274,6 +331,10 @@
         hue = hueFromText(name);
         sat = 60;
         light = 90;
+      } else if (type === "turn-moderator") {
+        hue = 36; // Amber
+        sat = 95;
+        light = 94;
       } else if (type === "turn-system") {
         hue = 160; // Green-ish
         sat = 0; // Gray
@@ -292,7 +353,11 @@
 
       const avatarEl = document.createElement("span");
       avatarEl.className = "turn-avatar";
-      if (type === "turn-system") {
+      if (type === "turn-moderator") {
+        avatarEl.textContent = "M";
+        avatarEl.style.backgroundColor = "#ffedd5";
+        avatarEl.style.color = "#9a3412";
+      } else if (type === "turn-system") {
         avatarEl.textContent = "S";
         avatarEl.style.backgroundColor = "#e5e5ea";
         avatarEl.style.color = "#8e8e93";
@@ -455,36 +520,42 @@
           setTurnMeta(turnCount, "진행 중");
           showProgress("토론 진행 중... (" + String(turnCount) + "턴)");
           appendTurnCard(
-            isModerator ? "turn-system" : "turn-persona",
+            isModerator ? "turn-moderator" : "turn-persona",
             (isModerator ? "MOD " : "TURN ") + String(turn.index || "?"),
             turn.speaker_name || turn.speaker_id || "Unknown",
             sanitizeTurnContent(turn.content || "")
           );
         });
 
-	        stream.addEventListener("complete", function (ev) {
-	          if (finished || isStaleStream()) {
-	            return;
-	          }
-	          finished = true;
+        stream.addEventListener("complete", function (ev) {
+          if (finished || isStaleStream()) {
+            return;
+          }
+          finished = true;
           const payload = parseJSON(ev.data) || {};
           const result = payload.result || {};
           const consensus = result.consensus || {};
           const openRisks = Array.isArray(consensus.open_risks) ? consensus.open_risks.filter(Boolean) : [];
           const riskLine = openRisks.length > 0 ? openRisks.join(", ") : "-";
-	          appendTurnCard(
-	            "turn-summary",
+          const nextActionOwner = consensus.next_action_owner || "-";
+          const nextActionTrigger = consensus.next_action_trigger_or_deadline || "-";
+          const nextActionSuccessMetric = consensus.next_action_success_metric || "-";
+          appendTurnCard(
+            "turn-summary",
             "SUMMARY",
             "토론 결과",
             "status: " + (result.status || "-") + "\nconsensus_score: " + Number(consensus.score || 0).toFixed(2) +
               "\nsummary: " + (consensus.summary || "-") +
               "\nopen_risks: " + riskLine +
+              "\nnext_action_owner: " + nextActionOwner +
+              "\nnext_action_trigger_or_deadline: " + nextActionTrigger +
+              "\nnext_action_success_metric: " + nextActionSuccessMetric +
               "\nrequired_next_action: " + (consensus.required_next_action || "-") +
               "\nsaved_json: " + (payload.saved_json_path || "-") +
               "\nsaved_markdown: " + (payload.saved_markdown_path || "-")
-	          );
-	          finalizeRunState("완료", "완료", "", false);
-	        });
+          );
+          finalizeRunState("완료", "완료", "", false);
+        });
 
 	        stream.addEventListener("debate_error", function (ev) {
 	          if (finished || isStaleStream()) {

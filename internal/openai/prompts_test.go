@@ -87,6 +87,15 @@ func TestBuildModeratorUserPromptIncludesNextSpeakerLens(t *testing.T) {
 	if !strings.Contains(prompt, "one data point, not the whole debate") {
 		t.Fatalf("expected anti-recency guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "DECISION_CHECK using this exact structure") {
+		t.Fatalf("expected fixed decision-check guidance in moderator prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "metric_threshold and decide_by must both be concrete values") {
+		t.Fatalf("expected concrete decision-check values guidance in moderator prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Moderator cadence signals:") {
+		t.Fatalf("expected moderator cadence signal section, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "Recent debate log:") {
 		t.Fatalf("expected recent log section, prompt=%q", prompt)
 	}
@@ -130,8 +139,35 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "strongest-form summary of an opposing view") {
 		t.Fatalf("expected fair opposing-view summary guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "never use meta labels like \"steelman\"") {
-		t.Fatalf("expected no-meta-term guidance, prompt=%q", prompt)
+	if !strings.Contains(prompt, "evidence_type=data|experience|assumption") || !strings.Contains(prompt, "confidence=low|medium|high") {
+		t.Fatalf("expected evidence-quality gate guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "SELF_CHECK: <likely bias/failure mode> -> <mitigation in this turn>") {
+		t.Fatalf("expected persona self-check guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "ISSUE_UPDATE: <issue>") {
+		t.Fatalf("expected unresolved issue registry guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not emit ISSUE_UPDATE or SELF_CHECK when nothing changed") {
+		t.Fatalf("expected selective metadata emission guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Deadlock breaker") || !strings.Contains(prompt, "OPTION_A:") || !strings.Contains(prompt, "OPTION_B:") {
+		t.Fatalf("expected deadlock decision-table guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "META_DELTA: changed=") {
+		t.Fatalf("expected periodic meta summary guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "unresolved blockers <=1") || !strings.Contains(prompt, "unowned issues = 0") || !strings.Contains(prompt, "decide_by signals >=1") {
+		t.Fatalf("expected quantitative close criteria guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "without bracket labels") {
+		t.Fatalf("expected non-tagged evidence/inference guidance, prompt=%q", prompt)
+	}
+	if strings.Contains(prompt, "Tag each core claim as [evidence], [inference], or [assumption].") {
+		t.Fatalf("did not expect forced bracket label taxonomy, prompt=%q", prompt)
+	}
+	if strings.Contains(strings.ToLower(prompt), "steelman") {
+		t.Fatalf("did not expect explicit steelman token in prompt, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "last two turns") {
 		t.Fatalf("expected repeat guardrail for two-turn window, prompt=%q", prompt)
@@ -203,6 +239,18 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	if !strings.Contains(prompt, "Close the loop on your previous intervention") {
 		t.Fatalf("expected moderator loop-closing guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "DECISION_CHECK: choose Option A or B") {
+		t.Fatalf("expected fixed decision-check format, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "no TBD/unknown/later/soon") {
+		t.Fatalf("expected non-placeholder decision-check values guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "metric_threshold must be numeric or explicit condition") {
+		t.Fatalf("expected metric-threshold specificity guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "SCORECARD: coherence=<0-100>; executability=<0-100>; risk_coverage=<0-100>") {
+		t.Fatalf("expected periodic scorecard rubric guidance, prompt=%q", prompt)
+	}
 }
 
 func TestBuildModeratorUserPromptIncludesMemoryAnchorsAndTension(t *testing.T) {
@@ -257,12 +305,15 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 			{Index: 1, SpeakerName: orchestrator.ModeratorSpeakerName, Type: orchestrator.TurnTypeModerator, Content: "정리"},
 		},
 		Consensus: orchestrator.Consensus{
-			Reached:            true,
-			Score:              0.91,
-			Summary:            "핵심 가설과 실행안에 합의함",
-			Rationale:          "실험 우선순위가 정렬됨",
-			OpenRisks:          []string{"모니터링 임계치 미확정"},
-			RequiredNextAction: "SRE가 롤백 트리거를 오늘 확정",
+			Reached:                 true,
+			Score:                   0.91,
+			Summary:                 "핵심 가설과 실행안에 합의함",
+			Rationale:               "실험 우선순위가 정렬됨",
+			OpenRisks:               []string{"모니터링 임계치 미확정"},
+			NextActionOwner:         "SRE",
+			NextActionTrigger:       "오늘 EOD",
+			NextActionSuccessMetric: "롤백 트리거 문서 반영",
+			RequiredNextAction:      "SRE가 롤백 트리거를 오늘 확정",
 		},
 		FinalStatus: orchestrator.StatusConsensusReached,
 	}
@@ -282,6 +333,9 @@ func TestBuildFinalModeratorUserPromptIncludesFinalStatus(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "required next action") {
 		t.Fatalf("expected required next action in prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "next action owner") || !strings.Contains(prompt, "next action success metric") {
+		t.Fatalf("expected structured next action fields in prompt, prompt=%q", prompt)
 	}
 }
 
@@ -308,6 +362,9 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "Interaction memory snapshot:") {
 		t.Fatalf("expected interaction memory section, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "persona failure-mode watch:") {
+		t.Fatalf("expected persona failure-mode watch in speaker profile, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "your latest claim:") {
 		t.Fatalf("expected own latest claim reminder, prompt=%q", prompt)
 	}
@@ -323,11 +380,44 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "Turn objective:") {
 		t.Fatalf("expected turn objective section, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Progress signals:") {
+		t.Fatalf("expected progress signals section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "close readiness snapshot: unresolved_blockers=") {
+		t.Fatalf("expected close-readiness snapshot in prompt, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "Debate phase:") || !strings.Contains(prompt, "current phase:") {
 		t.Fatalf("expected debate phase guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "decision-forcing handoff question") {
 		t.Fatalf("expected decision-forcing handoff objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "compare at least two plausible options (A/B)") {
+		t.Fatalf("expected exploration phase option-comparison guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "without bracket labels like [evidence] or [inference]") {
+		t.Fatalf("expected anti-labeling guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "quality checkpoint required now") || !strings.Contains(prompt, "evidence_type=data|experience|assumption") {
+		t.Fatalf("expected quality-checkpoint guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "include ISSUE_UPDATE only when opening a new issue or when owner/deadline/blocker changes") {
+		t.Fatalf("expected conditional issue registry guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "include SELF_CHECK when bias/confidence risk is material") {
+		t.Fatalf("expected conditional self-check guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "keep narrative human-readable, and keep machine metadata lines standalone") {
+		t.Fatalf("expected narrative/metadata separation guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "metadata labels are machine-readable control data") {
+		t.Fatalf("expected metadata non-display policy guidance in turn objective, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "periodic meta-summary turn") {
+		t.Fatalf("expected periodic meta-summary cadence trigger, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "META_DELTA with changed/unchanged/next_question") {
+		t.Fatalf("expected meta delta requirement, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "HANDOFF_ASK:") || !strings.Contains(prompt, "NEXT: <persona_id>") {
 		t.Fatalf("expected explicit control lines for handoff, prompt=%q", prompt)
@@ -335,8 +425,140 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
 		t.Fatalf("expected explicit close/new-point objective, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "unresolved_blockers<=1") || !strings.Contains(prompt, "unowned_issues=0") || !strings.Contains(prompt, "decide_by_signals>=1") {
+		t.Fatalf("expected quantitative close readiness rule, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "last two-turn claims") {
 		t.Fatalf("expected repeat guardrail in turn objective, prompt=%q", prompt)
+	}
+}
+
+func TestBuildTurnUserPromptConvergenceIncludesDecisionTemplate(t *testing.T) {
+	input := orchestrator.GenerateTurnInput{
+		Problem: "가격 정책 확정",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+			{ID: "p2", Name: "Finance", Role: "finance"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "옵션 A를 검토합시다."},
+			{Index: 2, SpeakerID: "p2", SpeakerName: "Finance", Type: orchestrator.TurnTypePersona, Content: "옵션 B가 수익성에 유리합니다."},
+			{Index: 3, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "리스크는 CAC 상승입니다."},
+			{Index: 4, SpeakerID: "p2", SpeakerName: "Finance", Type: orchestrator.TurnTypePersona, Content: "마진 임계치를 정의합시다."},
+		},
+		Speaker: persona.Persona{
+			ID:   "p1",
+			Name: "PM",
+			Role: "product",
+		},
+	}
+
+	prompt := buildTurnUserPrompt(input)
+	if !strings.Contains(prompt, "current phase: convergence") {
+		t.Fatalf("expected convergence phase, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "choose one provisional option and include owner + trigger/deadline") {
+		t.Fatalf("expected convergence decision template, prompt=%q", prompt)
+	}
+}
+
+func TestBuildTurnUserPromptDeadlockModeWhenNoNewPointStreak(t *testing.T) {
+	input := orchestrator.GenerateTurnInput{
+		Problem: "이탈률 개선",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+			{ID: "p2", Name: "Data", Role: "analytics"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "옵션 A를 유지합시다.\nNEW_POINT: no"},
+			{Index: 2, SpeakerID: "p2", SpeakerName: "Data", Type: orchestrator.TurnTypePersona, Content: "옵션 B를 보완합시다.\nNEW_POINT: no"},
+			{Index: 3, SpeakerID: orchestrator.ModeratorSpeakerID, SpeakerName: orchestrator.ModeratorSpeakerName, Type: orchestrator.TurnTypeModerator, Content: "교착을 깨기 위한 비교가 필요합니다."},
+		},
+		Speaker: persona.Persona{
+			ID:   "p1",
+			Name: "PM",
+			Role: "product",
+		},
+	}
+
+	prompt := buildTurnUserPrompt(input)
+	if !strings.Contains(prompt, "trailing persona NEW_POINT=no streak: 2") {
+		t.Fatalf("expected no-new-point streak summary, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "deadlock signal: repeated no-new-point streak detected") {
+		t.Fatalf("expected deadlock signal guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "deadlock mode required now: include OPTION_A/OPTION_B micro decision table") {
+		t.Fatalf("expected deadlock mode requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "quality checkpoint required now") {
+		t.Fatalf("expected quality checkpoint guidance in deadlock mode, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "issue-state checkpoint required now") {
+		t.Fatalf("expected issue checkpoint guidance in deadlock mode, prompt=%q", prompt)
+	}
+}
+
+func TestBuildTurnUserPromptDoesNotForceQualityCheckpointEveryTurn(t *testing.T) {
+	input := orchestrator.GenerateTurnInput{
+		Problem: "온보딩 개선",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+			{ID: "p2", Name: "Data", Role: "analytics"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "초기 가설"},
+			{Index: 2, SpeakerID: orchestrator.ModeratorSpeakerID, SpeakerName: orchestrator.ModeratorSpeakerName, Type: orchestrator.TurnTypeModerator, Content: "지표 기준을 제시해 주세요."},
+		},
+		Speaker: persona.Persona{
+			ID:   "p1",
+			Name: "PM",
+			Role: "product",
+		},
+	}
+
+	prompt := buildTurnUserPrompt(input)
+	if strings.Contains(prompt, "quality checkpoint required now") {
+		t.Fatalf("did not expect forced quality checkpoint on non-checkpoint turn, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "include evidence-quality clause when confidence/recommendation changes materially") {
+		t.Fatalf("expected conditional quality guidance on non-checkpoint turn, prompt=%q", prompt)
+	}
+}
+
+func TestBuildModeratorUserPromptIncludesScorecardCadenceTrigger(t *testing.T) {
+	input := orchestrator.GenerateModeratorInput{
+		Problem: "성장 전략",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+			{ID: "p2", Name: "Risk", Role: "risk"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "안 A 제안"},
+			{Index: 2, SpeakerID: "p2", SpeakerName: "Risk", Type: orchestrator.TurnTypePersona, Content: "안 B 보완"},
+			{Index: 3, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "실험 지표 제안"},
+			{Index: 4, SpeakerID: "p2", SpeakerName: "Risk", Type: orchestrator.TurnTypePersona, Content: "가드레일 제안"},
+		},
+		PreviousTurn: orchestrator.Turn{
+			Index:       4,
+			SpeakerID:   "p2",
+			SpeakerName: "Risk",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "가드레일 제안",
+		},
+		NextSpeaker: persona.Persona{
+			ID:   "p1",
+			Name: "PM",
+			Role: "product",
+		},
+	}
+
+	prompt := buildModeratorUserPrompt(input)
+	if !strings.Contains(prompt, "persona turns observed so far: 4") {
+		t.Fatalf("expected persona turn count in cadence signals, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "include SCORECARD + SCORECARD_REASON in this intervention") {
+		t.Fatalf("expected scorecard cadence trigger, prompt=%q", prompt)
 	}
 }
 
@@ -348,14 +570,59 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	if !strings.Contains(prompt, "0.90-1.00: workable consensus") {
 		t.Fatalf("expected score rubric upper band, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "If evidence is mixed or insufficient, prefer reached=false") {
+		t.Fatalf("expected conservative fallback rule, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "at least two different speakers/turns") {
 		t.Fatalf("expected rationale evidence requirement, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "open_risks") || !strings.Contains(prompt, "required_next_action") {
+	if !strings.Contains(prompt, "open_risks") || !strings.Contains(prompt, "next_action_owner") {
 		t.Fatalf("expected expanded judge output schema, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "owner and trigger/deadline") {
-		t.Fatalf("expected required_next_action calibration guidance, prompt=%q", prompt)
+	if !strings.Contains(prompt, "next_action_trigger_or_deadline") {
+		t.Fatalf("expected next action calibration guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "summary: exactly 1 sentence") || !strings.Contains(prompt, "open_risks: 0-3 items") {
+		t.Fatalf("expected compact output-length and risk-count constraints, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "exact order") || !strings.Contains(prompt, "single-line minified JSON object") {
+		t.Fatalf("expected strict json formatting guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "final character must be }") {
+		t.Fatalf("expected json closing brace requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Never omit required keys") || !strings.Contains(prompt, "next_action_owner: \"unassigned\"") {
+		t.Fatalf("expected fallback placeholder guidance for missing fields, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Self-repair before final output") {
+		t.Fatalf("expected malformed-json self-repair guidance, prompt=%q", prompt)
+	}
+}
+
+func TestBuildJudgeUserPromptIncludesFormatReminder(t *testing.T) {
+	prompt := buildJudgeUserPrompt(orchestrator.JudgeConsensusInput{
+		Problem: "릴리즈 Go/No-Go 결정",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+		},
+		Turns: []orchestrator.Turn{
+			{Index: 1, SpeakerID: "p1", SpeakerName: "PM", Type: orchestrator.TurnTypePersona, Content: "기능 범위를 축소하면 가능"},
+		},
+	})
+	if !strings.Contains(prompt, "Output format reminder:") {
+		t.Fatalf("expected output format reminder section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "return one minified JSON object on a single line only") {
+		t.Fatalf("expected minified single-line guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "key order: reached, score, summary, rationale, open_risks") {
+		t.Fatalf("expected key order guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "never omit keys; if uncertain, use placeholders") {
+		t.Fatalf("expected placeholder fallback reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "final character must be }") {
+		t.Fatalf("expected explicit final brace guidance, prompt=%q", prompt)
 	}
 }
 

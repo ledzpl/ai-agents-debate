@@ -346,6 +346,40 @@ select:focus {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.72));
 }
 
+.turn-moderator { align-self: stretch; }
+.turn-moderator::before {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2);
+}
+.turn-moderator .turn-name {
+  color: #92400e;
+}
+.turn-moderator .turn-badge {
+  color: #9a3412;
+  border-color: rgba(194, 65, 12, 0.35);
+  background: rgba(251, 146, 60, 0.14);
+  font-weight: 700;
+}
+.turn-moderator .turn-content {
+  position: relative;
+  border: 1px solid rgba(194, 65, 12, 0.28);
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.97), rgba(255, 237, 213, 0.9));
+  color: #7c2d12;
+  box-shadow: 0 12px 26px rgba(194, 65, 12, 0.14);
+}
+.turn-moderator .turn-content::before {
+  content: "사회자 정리";
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #9a3412;
+  background: rgba(251, 146, 60, 0.2);
+  border: 1px solid rgba(194, 65, 12, 0.2);
+}
+
 .turn-system { align-self: center; }
 .turn-system::before {
   background: rgba(134, 134, 139, 0.55);

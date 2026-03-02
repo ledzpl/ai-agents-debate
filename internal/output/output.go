@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ var markdownEntityReplacer = strings.NewReplacer(
 	"<", "&lt;",
 	">", "&gt;",
 )
+
+var evidenceQualityMetadataLine = regexp.MustCompile(`(?i)^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?$`)
 
 func SaveResult(path string, result orchestrator.Result) error {
 	dir := filepath.Dir(path)
@@ -158,6 +161,20 @@ func writeConsensusSection(b *strings.Builder, consensus orchestrator.Consensus)
 			b.WriteString(markdownBulletedText(risk, "") + "\n")
 		}
 	}
+	if strings.TrimSpace(consensus.NextActionOwner) != "" ||
+		strings.TrimSpace(consensus.NextActionTrigger) != "" ||
+		strings.TrimSpace(consensus.NextActionSuccessMetric) != "" {
+		b.WriteString("\n### Next Action Plan\n\n")
+		if strings.TrimSpace(consensus.NextActionOwner) != "" {
+			b.WriteString(markdownBulletedText("owner: "+consensus.NextActionOwner, "") + "\n")
+		}
+		if strings.TrimSpace(consensus.NextActionTrigger) != "" {
+			b.WriteString(markdownBulletedText("trigger/deadline: "+consensus.NextActionTrigger, "") + "\n")
+		}
+		if strings.TrimSpace(consensus.NextActionSuccessMetric) != "" {
+			b.WriteString(markdownBulletedText("success metric: "+consensus.NextActionSuccessMetric, "") + "\n")
+		}
+	}
 	if strings.TrimSpace(consensus.RequiredNextAction) != "" {
 		b.WriteString("\n### Required Next Action\n\n")
 		b.WriteString(markdownBulletedText(consensus.RequiredNextAction, "") + "\n")
@@ -280,7 +297,7 @@ func formatTurnsBySpeaker(turns []orchestrator.Turn) string {
 				b.WriteString("- timestamp: " + t.Timestamp.UTC().Format(time.RFC3339) + "\n")
 			}
 			b.WriteString("- content:\n")
-			b.WriteString(markdownBulletedText(t.Content, "  ") + "\n\n")
+			b.WriteString(markdownBulletedText(sanitizeTurnContentForDisplay(t.Content), "  ") + "\n\n")
 		}
 
 		b.WriteString("</details>\n")
@@ -345,6 +362,91 @@ func turnWord(n int) string {
 		return "turn"
 	}
 	return "turns"
+}
+
+func sanitizeTurnContentForDisplay(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	visible := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isHiddenDirectiveLine(trimmed) {
+			continue
+		}
+		visible = append(visible, line)
+	}
+	return strings.TrimSpace(strings.Join(visible, "\n"))
+}
+
+func isHiddenDirectiveLine(line string) bool {
+	normalized := normalizeDirectiveCandidate(line)
+	if evidenceQualityMetadataLine.MatchString(normalized) {
+		return true
+	}
+	normalized = strings.ToLower(normalized)
+	switch {
+	case hasDirectivePrefix(normalized, "handoff_ask"),
+		hasDirectivePrefix(normalized, "next"),
+		hasDirectivePrefix(normalized, "close"),
+		hasDirectivePrefix(normalized, "new_point"),
+		hasDirectivePrefix(normalized, "new-point"),
+		hasDirectivePrefix(normalized, "issue_update"),
+		hasDirectivePrefix(normalized, "meta_delta"),
+		hasDirectivePrefix(normalized, "self_check"),
+		hasDirectivePrefix(normalized, "option_a"),
+		hasDirectivePrefix(normalized, "option_b"),
+		hasDirectivePrefix(normalized, "scorecard"),
+		hasDirectivePrefix(normalized, "scorecard_reason"):
+		return true
+	default:
+		return false
+	}
+}
+
+func hasDirectivePrefix(line string, key string) bool {
+	if !strings.HasPrefix(line, key) {
+		return false
+	}
+	rest := strings.TrimSpace(line[len(key):])
+	return strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, "=") || strings.HasPrefix(rest, "：")
+}
+
+func normalizeDirectiveCandidate(line string) string {
+	s := strings.TrimSpace(line)
+	for {
+		prev := s
+		s = strings.TrimSpace(s)
+
+		if strings.HasPrefix(s, ">") {
+			s = strings.TrimSpace(strings.TrimPrefix(s, ">"))
+		}
+
+		lower := strings.ToLower(s)
+		switch {
+		case strings.HasPrefix(lower, "- [ ] "), strings.HasPrefix(lower, "- [x] "):
+			s = strings.TrimSpace(s[6:])
+		case len(s) >= 2 && (s[0] == '-' || s[0] == '*' || s[0] == '+') && s[1] == ' ':
+			s = strings.TrimSpace(s[2:])
+		default:
+			i := 0
+			for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+				i++
+			}
+			if i > 0 && i+1 < len(s) && s[i] == '.' && s[i+1] == ' ' {
+				s = strings.TrimSpace(s[i+2:])
+			}
+		}
+
+		if s == prev {
+			break
+		}
+	}
+	return s
 }
 
 func NewTimestampPath(dir string, now time.Time) string {

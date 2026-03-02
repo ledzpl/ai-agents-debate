@@ -70,20 +70,37 @@ func parseConsensusObject(jsonText string) (orchestrator.Consensus, error) {
 		return orchestrator.Consensus{}, err
 	}
 
-	requiredKeys := []string{"reached", "score", "summary", "rationale", "open_risks", "required_next_action"}
+	requiredKeys := []string{"reached", "score", "summary", "rationale", "open_risks"}
 	for _, key := range requiredKeys {
 		if _, ok := rawMap[key]; !ok {
 			return orchestrator.Consensus{}, errors.New("missing required consensus key: " + key)
 		}
 	}
+	_, hasLegacyNextAction := rawMap["required_next_action"]
+	_, hasNextActionOwner := rawMap["next_action_owner"]
+	_, hasNextActionTrigger := rawMap["next_action_trigger_or_deadline"]
+	_, hasNextActionSuccessMetric := rawMap["next_action_success_metric"]
+	hasStructuredNextAction := hasNextActionOwner && hasNextActionTrigger && hasNextActionSuccessMetric
+	if !hasStructuredNextAction && !hasLegacyNextAction {
+		if !hasNextActionOwner {
+			return orchestrator.Consensus{}, errors.New("missing required consensus key: next_action_owner")
+		}
+		if !hasNextActionTrigger {
+			return orchestrator.Consensus{}, errors.New("missing required consensus key: next_action_trigger_or_deadline")
+		}
+		return orchestrator.Consensus{}, errors.New("missing required consensus key: next_action_success_metric")
+	}
 
 	var parsed struct {
-		Reached            bool            `json:"reached"`
-		Score              float64         `json:"score"`
-		Summary            string          `json:"summary"`
-		Rationale          string          `json:"rationale"`
-		OpenRisks          json.RawMessage `json:"open_risks"`
-		RequiredNextAction string          `json:"required_next_action"`
+		Reached                 bool            `json:"reached"`
+		Score                   float64         `json:"score"`
+		Summary                 string          `json:"summary"`
+		Rationale               string          `json:"rationale"`
+		OpenRisks               json.RawMessage `json:"open_risks"`
+		NextActionOwner         string          `json:"next_action_owner"`
+		NextActionTrigger       string          `json:"next_action_trigger_or_deadline"`
+		NextActionSuccessMetric string          `json:"next_action_success_metric"`
+		RequiredNextAction      string          `json:"required_next_action"`
 	}
 	if err := json.Unmarshal([]byte(jsonText), &parsed); err != nil {
 		return orchestrator.Consensus{}, err
@@ -91,6 +108,9 @@ func parseConsensusObject(jsonText string) (orchestrator.Consensus, error) {
 
 	parsed.Summary = strings.TrimSpace(parsed.Summary)
 	parsed.Rationale = strings.TrimSpace(parsed.Rationale)
+	parsed.NextActionOwner = strings.TrimSpace(parsed.NextActionOwner)
+	parsed.NextActionTrigger = strings.TrimSpace(parsed.NextActionTrigger)
+	parsed.NextActionSuccessMetric = strings.TrimSpace(parsed.NextActionSuccessMetric)
 	parsed.RequiredNextAction = strings.TrimSpace(parsed.RequiredNextAction)
 	parsed.Score = clamp(parsed.Score, 0, 1)
 	openRisks, err := parseOpenRisks(parsed.OpenRisks)
@@ -101,18 +121,52 @@ func parseConsensusObject(jsonText string) (orchestrator.Consensus, error) {
 	if parsed.Summary == "" {
 		return orchestrator.Consensus{}, errors.New("summary is required")
 	}
-	if parsed.RequiredNextAction == "" {
+	if hasStructuredNextAction {
+		if parsed.NextActionOwner == "" {
+			return orchestrator.Consensus{}, errors.New("next_action_owner is required")
+		}
+		if parsed.NextActionTrigger == "" {
+			return orchestrator.Consensus{}, errors.New("next_action_trigger_or_deadline is required")
+		}
+		if parsed.NextActionSuccessMetric == "" {
+			return orchestrator.Consensus{}, errors.New("next_action_success_metric is required")
+		}
+	}
+	if !hasStructuredNextAction && parsed.RequiredNextAction == "" {
 		return orchestrator.Consensus{}, errors.New("required_next_action is required")
+	}
+	if parsed.RequiredNextAction == "" && hasStructuredNextAction {
+		parsed.RequiredNextAction = composeRequiredNextAction(parsed.NextActionOwner, parsed.NextActionTrigger, parsed.NextActionSuccessMetric)
 	}
 
 	return orchestrator.Consensus{
-		Reached:            parsed.Reached,
-		Score:              parsed.Score,
-		Summary:            parsed.Summary,
-		Rationale:          parsed.Rationale,
-		OpenRisks:          openRisks,
-		RequiredNextAction: parsed.RequiredNextAction,
+		Reached:                 parsed.Reached,
+		Score:                   parsed.Score,
+		Summary:                 parsed.Summary,
+		Rationale:               parsed.Rationale,
+		OpenRisks:               openRisks,
+		NextActionOwner:         parsed.NextActionOwner,
+		NextActionTrigger:       parsed.NextActionTrigger,
+		NextActionSuccessMetric: parsed.NextActionSuccessMetric,
+		RequiredNextAction:      parsed.RequiredNextAction,
 	}, nil
+}
+
+func composeRequiredNextAction(owner string, trigger string, successMetric string) string {
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(owner) != "" {
+		parts = append(parts, "owner: "+strings.TrimSpace(owner))
+	}
+	if strings.TrimSpace(trigger) != "" {
+		parts = append(parts, "trigger/deadline: "+strings.TrimSpace(trigger))
+	}
+	if strings.TrimSpace(successMetric) != "" {
+		parts = append(parts, "success metric: "+strings.TrimSpace(successMetric))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " | ")
 }
 
 func parseOpenRisks(raw json.RawMessage) ([]string, error) {
