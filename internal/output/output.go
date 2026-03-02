@@ -30,8 +30,8 @@ var markdownEntityReplacer = strings.NewReplacer(
 	">", "&gt;",
 )
 
-var evidenceQualityMetadataLine = regexp.MustCompile(`(?i)^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$`)
-var evidenceQualityMetadataInline = regexp.MustCompile(`(?i)\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*`)
+var evidenceQualityMetadataLine = regexp.MustCompile(`(?i)^\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$`)
+var evidenceQualityMetadataInline = regexp.MustCompile(`(?i)\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*`)
 
 func SaveResult(path string, result orchestrator.Result) error {
 	dir := filepath.Dir(path)

@@ -150,7 +150,7 @@
 
     function stripEvidenceMeta(line) {
       return String(line || "").replace(
-        /\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*/gi,
+        /\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*/gi,
         ""
       );
     }
@@ -164,7 +164,7 @@
 
     function isHiddenDirectiveLine(line) {
       const normalizedRaw = normalizeDirectiveCandidate(line);
-      if (/^\(?\s*evidence_type\s*=\s*[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$/i.test(normalizedRaw)) {
+      if (/^\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$/i.test(normalizedRaw)) {
         return true;
       }
       const normalized = normalizedRaw.toLowerCase();
