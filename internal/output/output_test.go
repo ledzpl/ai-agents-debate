@@ -89,7 +89,7 @@ func TestSaveResultWritesJSONAndMarkdown(t *testing.T) {
 	if !strings.Contains(mdText, "### Next Action Plan") || !strings.Contains(mdText, "owner: SRE") {
 		t.Fatalf("expected structured next action plan section, got %q", mdText)
 	}
-	if !strings.Contains(mdText, "### Required Next Action") || !strings.Contains(mdText, "rollback trigger owner") {
+	if !strings.Contains(mdText, "### Required Next Action") || !strings.Contains(mdText, "되돌리기(rollback) trigger owner") {
 		t.Fatalf("expected required next action section, got %q", mdText)
 	}
 	if !strings.Contains(mdText, "---") {
@@ -264,5 +264,55 @@ func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 	want := "일반 본문\n중간 판단\n추정 근거\n결론 라인"
 	if got != want {
 		t.Fatalf("unexpected sanitized content: got %q want %q", got, want)
+	}
+}
+
+func TestSanitizeTurnContentForDisplayRewritesTechnicalTerms(t *testing.T) {
+	input := strings.Join([]string{
+		"p95 latency를 300ms 이하로 유지",
+		"rollback trigger와 CAC 확인",
+	}, "\n")
+
+	got := sanitizeTurnContentForDisplay(input)
+	if !strings.Contains(got, "응답속도 상위 구간(p95) 응답 지연를 300ms 이하로 유지") {
+		t.Fatalf("expected p95/latency rewrite, got %q", got)
+	}
+	if !strings.Contains(got, "되돌리기(rollback) trigger와 고객 획득 비용(CAC) 확인") {
+		t.Fatalf("expected rollback/CAC rewrite, got %q", got)
+	}
+}
+
+func TestFormatResultMarkdownRewritesTechnicalTermsInConsensus(t *testing.T) {
+	result := orchestrator.Result{
+		Problem: "test",
+		Status:  orchestrator.StatusConsensusReached,
+		Consensus: orchestrator.Consensus{
+			Reached:                 true,
+			Score:                   0.9,
+			Summary:                 "p95 latency 개선이 핵심",
+			Rationale:               "rollout 전에 rollback 기준 합의",
+			OpenRisks:               []string{"CAC 급등 가능성"},
+			NextActionOwner:         "SRE",
+			NextActionTrigger:       "today",
+			NextActionSuccessMetric: "conversion >= 15%",
+			RequiredNextAction:      "LTV 검증 리포트 작성",
+		},
+	}
+
+	md := formatResultMarkdown(result)
+	if !strings.Contains(md, "응답속도 상위 구간(p95) 응답 지연 개선이 핵심") {
+		t.Fatalf("expected consensus summary rewrite, got %q", md)
+	}
+	if !strings.Contains(md, "점진 배포(rollout) 전에 되돌리기(rollback) 기준 합의") {
+		t.Fatalf("expected rationale rewrite, got %q", md)
+	}
+	if !strings.Contains(md, "고객 획득 비용(CAC) 급등 가능성") {
+		t.Fatalf("expected risk rewrite, got %q", md)
+	}
+	if !strings.Contains(md, "전환율(conversion) &gt;= 15%") {
+		t.Fatalf("expected next action metric rewrite, got %q", md)
+	}
+	if !strings.Contains(md, "고객 생애 가치(LTV) 검증 리포트 작성") {
+		t.Fatalf("expected required action rewrite, got %q", md)
 	}
 }

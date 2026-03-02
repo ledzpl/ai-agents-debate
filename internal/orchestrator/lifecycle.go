@@ -48,11 +48,12 @@ func (o *Orchestrator) appendFinalModeratorTurn(ctx context.Context, res *Result
 	}
 
 	input := GenerateFinalModeratorInput{
-		Problem:     res.Problem,
-		Personas:    res.Personas,
-		Turns:       res.Turns,
-		Consensus:   res.Consensus,
-		FinalStatus: status,
+		Problem:      res.Problem,
+		Personas:     res.Personas,
+		Turns:        res.Turns,
+		Consensus:    res.Consensus,
+		FinalStatus:  status,
+		AudienceMode: o.cfg.AudienceMode,
 	}
 
 	content := ""

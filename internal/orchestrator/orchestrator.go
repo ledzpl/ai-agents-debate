@@ -24,6 +24,9 @@ const (
 
 	ModeratorSpeakerID   = "moderator"
 	ModeratorSpeakerName = "사회자"
+
+	AudienceModeGeneral = "general"
+	AudienceModeExpert  = "expert"
 )
 
 const (
@@ -84,10 +87,11 @@ type Result struct {
 }
 
 type GenerateTurnInput struct {
-	Problem  string
-	Personas []persona.Persona
-	Turns    []Turn
-	Speaker  persona.Persona
+	Problem      string
+	Personas     []persona.Persona
+	Turns        []Turn
+	Speaker      persona.Persona
+	AudienceMode string
 }
 
 type GenerateTurnOutput struct {
@@ -102,6 +106,7 @@ type GenerateModeratorInput struct {
 	PreviousTurn  Turn
 	NextSpeaker   persona.Persona
 	CurrentTurnNo int
+	AudienceMode  string
 }
 
 type GenerateModeratorOutput struct {
@@ -110,11 +115,12 @@ type GenerateModeratorOutput struct {
 }
 
 type GenerateFinalModeratorInput struct {
-	Problem     string
-	Personas    []persona.Persona
-	Turns       []Turn
-	Consensus   Consensus
-	FinalStatus string
+	Problem      string
+	Personas     []persona.Persona
+	Turns        []Turn
+	Consensus    Consensus
+	FinalStatus  string
+	AudienceMode string
 }
 
 type GenerateFinalModeratorOutput struct {
@@ -123,9 +129,10 @@ type GenerateFinalModeratorOutput struct {
 }
 
 type JudgeConsensusInput struct {
-	Problem  string
-	Personas []persona.Persona
-	Turns    []Turn
+	Problem      string
+	Personas     []persona.Persona
+	Turns        []Turn
+	AudienceMode string
 }
 
 type JudgeConsensusOutput struct {
@@ -170,6 +177,8 @@ type Config struct {
 	DirectHandoffJudgeEvery int
 	// LLMHistoryTurnWindow limits how many recent turns are sent to LLM calls.
 	LLMHistoryTurnWindow int
+	// AudienceMode controls explanation depth in prompts: general|expert.
+	AudienceMode string
 }
 
 type Orchestrator struct {
@@ -214,7 +223,17 @@ func New(llm LLMClient, cfg Config) *Orchestrator {
 	if cfg.LLMHistoryTurnWindow <= 0 {
 		cfg.LLMHistoryTurnWindow = defaultLLMHistoryTurnWindow
 	}
+	cfg.AudienceMode = normalizeAudienceMode(cfg.AudienceMode)
 	return &Orchestrator{llm: llm, cfg: cfg}
+}
+
+func normalizeAudienceMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case AudienceModeExpert:
+		return AudienceModeExpert
+	default:
+		return AudienceModeGeneral
+	}
 }
 
 func (o *Orchestrator) Run(ctx context.Context, problem string, personas []persona.Persona, onTurn func(Turn)) (Result, error) {
@@ -409,10 +428,11 @@ func (o *Orchestrator) preTurnStatus(started time.Time, turnIndex int, maxTurns 
 
 func (o *Orchestrator) generatePersonaTurn(ctx context.Context, res *Result, personas []persona.Persona, speaker persona.Persona, turnNo int) (Turn, error) {
 	out, err := o.llm.GenerateTurn(ctx, GenerateTurnInput{
-		Problem:  res.Problem,
-		Personas: personas,
-		Turns:    o.llmTurns(res.Turns),
-		Speaker:  speaker,
+		Problem:      res.Problem,
+		Personas:     personas,
+		Turns:        o.llmTurns(res.Turns),
+		Speaker:      speaker,
+		AudienceMode: o.cfg.AudienceMode,
 	})
 	if err != nil {
 		return Turn{}, err
@@ -445,9 +465,10 @@ func (o *Orchestrator) shouldJudgeAtTurn(turnIndex int, personaCount int, direct
 
 func (o *Orchestrator) evaluateConsensus(ctx context.Context, res *Result, personas []persona.Persona, turnNo int, progress *judgeProgress) (string, bool, error) {
 	judgeOut, err := o.llm.JudgeConsensus(ctx, JudgeConsensusInput{
-		Problem:  res.Problem,
-		Personas: personas,
-		Turns:    o.llmTurns(res.Turns),
+		Problem:      res.Problem,
+		Personas:     personas,
+		Turns:        o.llmTurns(res.Turns),
+		AudienceMode: o.cfg.AudienceMode,
 	})
 	if err != nil {
 		return "", false, err
@@ -532,6 +553,7 @@ func (o *Orchestrator) generateModeratorTurn(ctx context.Context, res *Result, p
 		PreviousTurn:  previousTurn,
 		NextSpeaker:   nextSpeaker,
 		CurrentTurnNo: turnNo,
+		AudienceMode:  o.cfg.AudienceMode,
 	})
 	if err != nil {
 		return Turn{}, err

@@ -56,6 +56,7 @@ func main() {
 		UnlimitedHardMaxTurns:   settings.HardMaxTurns,
 		DirectHandoffJudgeEvery: settings.DirectJudgeEvery,
 		LLMHistoryTurnWindow:    settings.LLMHistoryWindow,
+		AudienceMode:            settings.AudienceMode,
 	})
 
 	app := web.NewApp(web.Config{

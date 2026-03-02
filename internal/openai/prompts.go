@@ -79,14 +79,20 @@ func buildTurnSystemPrompt() string {
 Rules:
 - Priority if instructions conflict: control-line/output format rules > direct moderator request > decision progress > persona style.
 - Respond in the same language as the problem statement.
+- Adapt explanation depth to audience_mode from the user prompt (general|expert).
+- If audience_mode=general, prefer everyday words and keep technical terms to <=3 with one short parenthetical explanation each.
+- If audience_mode=expert, use precise technical language when useful, but keep it concise and readable.
+- Keep each narrative sentence short (target <=25 words).
 - Structure your turn as: core claim -> reason/mechanism -> practical implication.
 - Each turn body must include: one claim, one reason/mechanism, and one verification condition (metric, trigger, or falsifier).
+- Include one plain-language user-impact sentence (why this matters to a general user).
 - Ground claims in observed evidence, inference, or assumption naturally, without bracket labels.
 - For your main claim, include one concise evidence-quality clause (evidence_type=data|experience|assumption, confidence=low|medium|high) when confidence or recommendation changed.
 - Keep narrative text and machine-readable metadata separate.
 - Use metadata labels only as standalone lines; do not embed labels (ISSUE_UPDATE/META_DELTA/SELF_CHECK/OPTION_A/OPTION_B) inside prose sentences.
-- Include one unresolved-issue registry line when opening a new issue or when owner/deadline/blocker changed:
-  ISSUE_UPDATE: <issue> | owner=<id/name or unassigned> | deadline=<date/trigger> | blocker=<none or blocker>
+- Do not translate or rename machine control labels; keep exact uppercase ASCII labels (ISSUE_UPDATE, META_DELTA, SELF_CHECK, OPTION_A, OPTION_B, HANDOFF_ASK, NEXT, CLOSE, NEW_POINT).
+- Include one unresolved-issue registry line when opening a new issue or when owner/decide_by/blocker changed:
+  ISSUE_UPDATE: <issue> | owner=<id/name or unassigned> | decide_by=<date/trigger> | blocker=<none or blocker>
 - Do not emit ISSUE_UPDATE or SELF_CHECK when nothing changed and no checkpoint is requested.
 - Keep the debate interactive: explicitly connect to one named speaker's prior claim (agree, refine, or challenge).
 - If a moderator question/request is provided, answer it in your first sentence before expanding.
@@ -99,6 +105,7 @@ Rules:
 - If you disagree, state which assumption differs and what evidence would falsify your position.
 - If you mostly agree, push toward convergence with a concrete decision criterion or next step.
 - Cite 1-2 prior turns by index notation like [3] when relevant.
+- Do not invent turn indexes; cite only indexes verifiable from the provided debate log.
 - Prefer specific, falsifiable statements (assumptions, constraints, metrics, tradeoffs).
 - Do not repeat claims from your last two turns unless assumptions changed or new evidence is added.
 - If a metric/threshold is unchanged from your prior turn, cite it briefly instead of restating the full rationale.
@@ -119,9 +126,10 @@ Rules:
   - decide_by signals >=1
 - End with one line: NEW_POINT: yes|no (yes only if this turn adds a materially new point).
 - The four control lines above must appear at the very end in that exact order.
+- Self-repair before final output: if any required control line is missing/misordered, or NEXT points to self/non-participant, rewrite once and return corrected output.
 - Every 4th persona turn, include one short line before control lines:
   META_DELTA: changed=<what changed>; unchanged=<what is still unresolved>; next_question=<one must-answer question>
-- Keep the response compact: body in 2-4 short sentences before control lines.
+- Keep the response compact: body in 2-5 short sentences before control lines.
 - Avoid recap unless it changed the decision.
 - Return plain text only, without speaker labels or markdown.`)
 }
@@ -179,6 +187,7 @@ func buildOpeningSpeakerSelectorUserPrompt(input orchestrator.SelectOpeningSpeak
 func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
 	phase := debatePhase(len(input.Turns), len(input.Personas))
+	audienceMode := normalizePromptAudienceMode(input.AudienceMode)
 
 	var b strings.Builder
 	b.WriteString("Problem:\n")
@@ -223,6 +232,14 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	}
 	b.WriteString("- persona failure-mode watch: " + derivePersonaFailureMode(input.Speaker) + "\n")
 
+	b.WriteString("\nAudience mode:\n")
+	b.WriteString("- requested audience_mode: " + audienceMode + "\n")
+	if audienceMode == orchestrator.AudienceModeExpert {
+		b.WriteString("- style target: expert readers; prioritize precision and compact technical reasoning.\n")
+	} else {
+		b.WriteString("- style target: general readers; prioritize plain language and quick comprehension.\n")
+	}
+
 	b.WriteString("\nParticipants:\n")
 	for _, p := range input.Personas {
 		b.WriteString(participantPromptLine(p) + "\n")
@@ -265,6 +282,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	b.WriteString(fmt.Sprintf("- trailing persona NEW_POINT=no streak: %d\n", noNewPointStreak))
 	b.WriteString(fmt.Sprintf("- close readiness snapshot: unresolved_blockers=%d, unowned_issues=%d, decide_by_signals=%d\n",
 		closeReadiness.unresolvedBlockers, closeReadiness.unownedIssues, closeReadiness.decideBySignals))
+	b.WriteString("- CLOSE decision must use the snapshot above as source of truth; if any CLOSE gate is unmet, set CLOSE=no.\n")
 	if upcomingTurnNo%4 == 0 {
 		b.WriteString("- cadence trigger: this is a periodic meta-summary turn (every 4 turns).\n")
 	}
@@ -278,28 +296,32 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 		b.WriteString("- propose option A and option B briefly, then state what metric decides between them.\n")
 	} else {
 		b.WriteString("- answer the latest moderator request first when available.\n")
-		b.WriteString("- respond to one concrete prior claim by speaker name and include at least one [turn-index] citation.\n")
+		b.WriteString("- respond to one concrete prior claim by speaker name; when claim reference is clear and verifiable, include at least one [turn-index] citation.\n")
 		b.WriteString("- resolve or sharpen one active tension with a condition/metric.\n")
 		b.WriteString("- contribute one new insight, not a restatement of your last claim.\n")
 		b.WriteString("- before your rebuttal, briefly summarize the strongest opposing view fairly without meta labels.\n")
 	}
-	b.WriteString("- do not repeat your last two-turn claims unless assumptions changed or evidence is new.\n")
-	b.WriteString("- keep narrative human-readable, and keep machine metadata lines standalone (ISSUE_UPDATE/META_DELTA/SELF_CHECK).\n")
+	if audienceMode == orchestrator.AudienceModeExpert {
+		b.WriteString("- audience mode: explain for expert readers with precise terminology and compact logic.\n")
+		b.WriteString("- jargon is allowed when useful; define only high-impact domain terms once if ambiguity risk is high.\n")
+		b.WriteString("- still include one plain sentence on user impact for non-specialists.\n")
+	} else {
+		b.WriteString("- audience mode: explain so a non-expert can follow quickly.\n")
+		b.WriteString("- avoid unexplained jargon or acronyms; when unavoidable, define once in parentheses.\n")
+		b.WriteString("- include one plain sentence on user impact: what changes for users if this is chosen.\n")
+	}
 	if qualityCheckpointRequired {
 		b.WriteString("- quality checkpoint required now: include one evidence-quality clause (evidence_type=data|experience|assumption, confidence=low|medium|high) or one SELF_CHECK line.\n")
 	} else {
 		b.WriteString("- include evidence-quality clause when confidence/recommendation changes materially.\n")
 	}
 	if issueCheckpointRequired {
-		b.WriteString("- issue-state checkpoint required now: include ISSUE_UPDATE: <issue> | owner=<...> | deadline=<...> | blocker=<...>.\n")
+		b.WriteString("- issue-state checkpoint required now: include ISSUE_UPDATE: <issue> | owner=<...> | decide_by=<...> | blocker=<...>.\n")
 	} else {
-		b.WriteString("- include ISSUE_UPDATE only when opening a new issue or when owner/deadline/blocker changes (lightweight cadence, not every turn).\n")
+		b.WriteString("- include ISSUE_UPDATE only when opening a new issue or when owner/decide_by/blocker changes (lightweight cadence, not every turn).\n")
 	}
-	b.WriteString("- include SELF_CHECK when bias/confidence risk is material for this turn.\n")
-	b.WriteString("- metadata labels are machine-readable control data; do not mention those label names inside narrative sentences.\n")
-	b.WriteString("- express evidence/inference/assumption naturally without bracket labels like [evidence] or [inference].\n")
 	if noNewPointStreak >= 2 {
-		b.WriteString("- deadlock mode required now: include OPTION_A/OPTION_B micro decision table with upside, risk, and falsifier experiment.\n")
+		b.WriteString("- deadlock mode required now: apply the system deadlock breaker (OPTION_A/OPTION_B table).\n")
 	}
 	if upcomingTurnNo%4 == 0 {
 		b.WriteString("- periodic meta-summary required now: include META_DELTA with changed/unchanged/next_question before control lines.\n")
@@ -310,8 +332,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	b.WriteString("  - NEXT: <persona_id> (must match one Participants id exactly; if ambiguous, still choose one explicit id)\n")
 	b.WriteString("  - CLOSE: yes|no (yes only if <=2 options, unresolved_blockers<=1, unowned_issues=0, decide_by_signals>=1)\n")
 	b.WriteString("  - NEW_POINT: yes|no\n")
-	b.WriteString("- keep body to 2-4 short sentences before control lines; avoid recap unless the decision changed.\n")
-	b.WriteString("- keep output concise: no long recap of the whole debate.\n")
+	b.WriteString("- do not translate or rename any control-line label; keep exact ASCII labels.\n")
 
 	b.WriteString("\nNow provide your next utterance.")
 	return b.String()
@@ -322,6 +343,9 @@ func buildJudgeSystemPrompt() string {
 Evaluate whether the participants have reached a workable consensus.
 Judging rules:
 - Be conservative: set reached=true only if there is clear alignment on goal, approach, and immediate next step.
+- Adapt summary/rationale wording depth to audience_mode from the user prompt (general|expert).
+- If audience_mode=general, prefer plain-language phrasing in summary/rationale.
+- If audience_mode=expert, prefer precise technical phrasing while staying concise.
 - If evidence is mixed or insufficient, prefer reached=false and explain the blocking gap.
 - Penalize unresolved critical contradictions, blocked dependencies, or unowned risks.
 - Score rubric:
@@ -364,15 +388,20 @@ func buildModeratorSystemPrompt() string {
 	return strings.TrimSpace(`You are the moderator of a multi-persona debate.
 Rules:
 - Respond in the same language as the problem statement.
+- Adapt wording depth to audience_mode from the user prompt (general|expert).
 - Keep intervention compact: exactly 4 required lines (+ optional scorecard lines).
 - Use the provided "Debate memory snapshot" as primary grounding context; treat the latest statement as secondary evidence.
 - Avoid recency bias: do not treat the latest statement as the dominant view unless it is corroborated by earlier turns.
 - Keep your intervention structured as: synthesis -> unresolved tradeoff -> targeted next-speaker question.
 - Required line format and order:
-  SYNTHESIS: <1 short sentence on multi-turn trajectory>
+  SYNTHESIS: <1 short sentence on trajectory across multiple recent turns>
   TENSION: <highest-impact unresolved tradeoff + missing evidence>
   ASK: <decision-forcing prompt tailored to the next speaker style>
   DECISION_CHECK: choose Option A or B; metric_threshold=<number/condition>; decide_by=<time or trigger>.
+- Optional disambiguation lines (only when options are fuzzy, before DECISION_CHECK):
+  OPTION_A: <option in <=8 words>
+  OPTION_B: <option in <=8 words>
+- The 4 required lines remain mandatory even when optional lines are added.
 - Explicitly account for at least one supporting point and one tension/tradeoff from different speakers when possible.
 - In the handoff, name at least one specific prior claim (speaker + idea) that the next speaker must respond to.
 - Close the loop on your previous intervention: briefly state whether it was answered, partially answered, or still open.
@@ -383,12 +412,14 @@ Rules:
 - metric_threshold must be numeric or explicit condition (for example >=2.5%, p95<300ms, conversion>=15%).
 - decide_by must be an explicit deadline or trigger condition.
 - If options are still fuzzy, define provisional Option A and Option B in <=8 words each before DECISION_CHECK.
+- Do not translate or rename required labels; keep exact uppercase ASCII labels (SYNTHESIS, TENSION, ASK, DECISION_CHECK, OPTION_A, OPTION_B, SCORECARD, SCORECARD_REASON).
 - Every 4th persona turn, append a quantitative rubric line:
   SCORECARD: coherence=<0-100>; executability=<0-100>; risk_coverage=<0-100>
   SCORECARD_REASON: <one short reason tying score deltas to recent turns>
 - SCORECARD and SCORECARD_REASON are machine-readable metadata lines; keep them standalone and out of narrative prose.
 - If the next speaker has master_name, explicitly ask them to apply that master's known books, papers, or articles.
 - Keep it concise and actionable: about 4 core lines / up to 6 short sentences.
+- Self-repair before final output: if required line prefixes/order are broken or DECISION_CHECK misses metric_threshold/decide_by, rewrite once and return corrected output.
 - Do not add prose before SYNTHESIS or after final metadata line.
 - Return plain text only, without markdown.`)
 }
@@ -396,6 +427,7 @@ Rules:
 func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
 	personaTurnCount := countPersonaTurns(input.Turns)
+	audienceMode := normalizePromptAudienceMode(input.AudienceMode)
 
 	var b strings.Builder
 	b.WriteString("Problem:\n")
@@ -415,6 +447,14 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 	b.WriteString("- treat the latest persona statement as one data point, not the whole debate.\n")
 	b.WriteString("- use compact 4-line output: SYNTHESIS -> TENSION -> ASK -> DECISION_CHECK.\n")
 	b.WriteString("- use exact standalone prefixes in order: SYNTHESIS:, TENSION:, ASK:, DECISION_CHECK:.\n")
+	b.WriteString("- if options are fuzzy, add optional OPTION_A:/OPTION_B: lines before DECISION_CHECK (these do not replace required 4 lines).\n")
+	b.WriteString("- never translate or rename label prefixes; use exact uppercase ASCII labels.\n")
+	b.WriteString("- audience mode is " + audienceMode + "; tune wording depth accordingly.\n")
+	if audienceMode == orchestrator.AudienceModeExpert {
+		b.WriteString("- expert mode: keep precision high and avoid over-explaining basics.\n")
+	} else {
+		b.WriteString("- general mode: favor plain language, avoid unexplained acronyms/jargon.\n")
+	}
 	b.WriteString("- ground synthesis/tradeoff in multiple recent turns and speakers.\n")
 	b.WriteString("- explicitly point the next speaker to at least one prior claim they must answer.\n")
 	b.WriteString("- ask for decision-ready output (metric/trigger/owner/option) rather than generic opinion.\n")
@@ -459,20 +499,34 @@ func buildFinalModeratorSystemPrompt() string {
 	return strings.TrimSpace(`You are the moderator closing a multi-persona debate.
 Rules:
 - Respond in the same language as the problem statement.
+- Adapt explanation depth to audience_mode from the user prompt (general|expert).
 - Provide a final wrap-up and overall assessment in 3-5 concise sentences.
+- First sentence must be a plain-language verdict that non-experts can understand immediately.
 - Include: key agreements, unresolved risks, and a practical next-step recommendation.
+- Include one concrete action sentence in what/who/when format.
+- Avoid unexplained acronyms/jargon; if unavoidable, add short parenthetical definitions.
+- Do not introduce new facts beyond the provided debate and judge context; if uncertain, state uncertainty briefly.
 - Incorporate the consensus score/rationale as confidence calibration (without repeating raw JSON).
 - End with one clear decision-oriented concluding sentence.
 - Return plain text only, without markdown.`)
 }
 
 func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInput) string {
+	audienceMode := normalizePromptAudienceMode(input.AudienceMode)
+
 	var b strings.Builder
 	b.WriteString("Problem:\n")
 	b.WriteString(input.Problem)
 	b.WriteString("\n\nParticipants:\n")
 	for _, p := range input.Personas {
 		b.WriteString(participantPromptLine(p) + "\n")
+	}
+	b.WriteString("\nAudience mode:\n")
+	b.WriteString("- requested audience_mode: " + audienceMode + "\n")
+	if audienceMode == orchestrator.AudienceModeExpert {
+		b.WriteString("- expert mode: concise and precise closing summary.\n")
+	} else {
+		b.WriteString("- general mode: plain-language closing summary for non-specialists.\n")
 	}
 
 	b.WriteString("\nFinal status:\n")
@@ -515,6 +569,7 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
 	judgeTurns := trimTurns(input.Turns, budget.judgeRecentLogLimit)
+	audienceMode := normalizePromptAudienceMode(input.AudienceMode)
 
 	var b strings.Builder
 	b.WriteString("Problem:\n")
@@ -529,6 +584,13 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	}
 	b.WriteString("\nDecision-state snapshot:\n")
 	b.WriteString(buildJudgeDecisionStateSnapshot(judgeTurns))
+	b.WriteString("\nAudience mode:\n")
+	b.WriteString("- requested audience_mode: " + audienceMode + "\n")
+	if audienceMode == orchestrator.AudienceModeExpert {
+		b.WriteString("- style target: expert readers; keep summary/rationale precise and compact.\n")
+	} else {
+		b.WriteString("- style target: general readers; keep summary/rationale plain-language.\n")
+	}
 	b.WriteString("\nOutput format reminder:\n")
 	b.WriteString("- return one minified JSON object on a single line only.\n")
 	b.WriteString("- key order: reached, score, summary, rationale, open_risks, next_action_owner, next_action_trigger_or_deadline, next_action_success_metric.\n")
@@ -553,6 +615,15 @@ func normalizePromptList(values []string) []string {
 		return nil
 	}
 	return out
+}
+
+func normalizePromptAudienceMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case orchestrator.AudienceModeExpert:
+		return orchestrator.AudienceModeExpert
+	default:
+		return orchestrator.AudienceModeGeneral
+	}
 }
 
 func buildTurnInteractionSnapshot(turns []orchestrator.Turn, speaker persona.Persona, budget promptBudget) string {
@@ -662,7 +733,7 @@ type closeReadinessSummary struct {
 type issueState struct {
 	issue    string
 	owner    string
-	deadline string
+	decideBy string
 	blocker  string
 }
 
@@ -682,7 +753,7 @@ func summarizeCloseReadiness(turns []orchestrator.Turn) closeReadinessSummary {
 		if !isNoBlocker(state.blocker) {
 			summary.unresolvedBlockers++
 		}
-		if !isPlaceholderValue(state.deadline) {
+		if !isPlaceholderValue(state.decideBy) {
 			summary.decideBySignals++
 		}
 	}
@@ -712,18 +783,18 @@ func buildJudgeDecisionStateSnapshot(turns []orchestrator.Turn) string {
 		for _, key := range keys {
 			state := snapshot.issues[key]
 			owner := strings.TrimSpace(state.owner)
-			deadline := strings.TrimSpace(state.deadline)
+			decideBy := strings.TrimSpace(state.decideBy)
 			blocker := strings.TrimSpace(state.blocker)
 			if owner == "" {
 				owner = "unassigned"
 			}
-			if deadline == "" {
-				deadline = "none"
+			if decideBy == "" {
+				decideBy = "none"
 			}
 			if blocker == "" {
 				blocker = "none"
 			}
-			b.WriteString(fmt.Sprintf("  - %s: owner=%s; deadline=%s; blocker=%s\n", state.issue, owner, deadline, blocker))
+			b.WriteString(fmt.Sprintf("  - %s: owner=%s; decide_by=%s; blocker=%s\n", state.issue, owner, decideBy, blocker))
 		}
 	}
 
@@ -793,9 +864,9 @@ func applyIssueUpdate(payload string, states map[string]issueState, anonymousIss
 		case strings.HasPrefix(lower, "owner="):
 			state.owner = strings.TrimSpace(segment[len("owner="):])
 		case strings.HasPrefix(lower, "deadline="):
-			state.deadline = strings.TrimSpace(segment[len("deadline="):])
+			state.decideBy = strings.TrimSpace(segment[len("deadline="):])
 		case strings.HasPrefix(lower, "decide_by="):
-			state.deadline = strings.TrimSpace(segment[len("decide_by="):])
+			state.decideBy = strings.TrimSpace(segment[len("decide_by="):])
 		case strings.HasPrefix(lower, "blocker="):
 			state.blocker = strings.TrimSpace(segment[len("blocker="):])
 		}

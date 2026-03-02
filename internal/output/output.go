@@ -32,6 +32,18 @@ var markdownEntityReplacer = strings.NewReplacer(
 
 var evidenceQualityMetadataLine = regexp.MustCompile(`(?i)^\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*$`)
 var evidenceQualityMetadataInline = regexp.MustCompile(`(?i)\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*`)
+var technicalTermPlainRewrites = []struct {
+	pattern *regexp.Regexp
+	repl    string
+}{
+	{pattern: regexp.MustCompile(`(?i)\bp95\b`), repl: "응답속도 상위 구간(p95)"},
+	{pattern: regexp.MustCompile(`(?i)\blatency\b`), repl: "응답 지연"},
+	{pattern: regexp.MustCompile(`(?i)\brollback\b`), repl: "되돌리기(rollback)"},
+	{pattern: regexp.MustCompile(`(?i)\brollout\b`), repl: "점진 배포(rollout)"},
+	{pattern: regexp.MustCompile(`(?i)\bcac\b`), repl: "고객 획득 비용(CAC)"},
+	{pattern: regexp.MustCompile(`(?i)\bltv\b`), repl: "고객 생애 가치(LTV)"},
+	{pattern: regexp.MustCompile(`(?i)\bconversion\b`), repl: "전환율(conversion)"},
+}
 
 func SaveResult(path string, result orchestrator.Result) error {
 	dir := filepath.Dir(path)
@@ -150,16 +162,16 @@ func writeConsensusSection(b *strings.Builder, consensus orchestrator.Consensus)
 	b.WriteString(fmt.Sprintf("- score: %.2f\n", consensus.Score))
 	if strings.TrimSpace(consensus.Summary) != "" {
 		b.WriteString("\n### Summary\n\n")
-		b.WriteString(markdownBulletedText(consensus.Summary, "") + "\n")
+		b.WriteString(markdownBulletedText(rewriteTechnicalTerms(consensus.Summary), "") + "\n")
 	}
 	if strings.TrimSpace(consensus.Rationale) != "" {
 		b.WriteString("\n### Rationale\n\n")
-		b.WriteString(markdownBulletedText(consensus.Rationale, "") + "\n")
+		b.WriteString(markdownBulletedText(rewriteTechnicalTerms(consensus.Rationale), "") + "\n")
 	}
 	if len(consensus.OpenRisks) > 0 {
 		b.WriteString("\n### Open Risks\n\n")
 		for _, risk := range consensus.OpenRisks {
-			b.WriteString(markdownBulletedText(risk, "") + "\n")
+			b.WriteString(markdownBulletedText(rewriteTechnicalTerms(risk), "") + "\n")
 		}
 	}
 	if strings.TrimSpace(consensus.NextActionOwner) != "" ||
@@ -167,18 +179,18 @@ func writeConsensusSection(b *strings.Builder, consensus orchestrator.Consensus)
 		strings.TrimSpace(consensus.NextActionSuccessMetric) != "" {
 		b.WriteString("\n### Next Action Plan\n\n")
 		if strings.TrimSpace(consensus.NextActionOwner) != "" {
-			b.WriteString(markdownBulletedText("owner: "+consensus.NextActionOwner, "") + "\n")
+			b.WriteString(markdownBulletedText("owner: "+rewriteTechnicalTerms(consensus.NextActionOwner), "") + "\n")
 		}
 		if strings.TrimSpace(consensus.NextActionTrigger) != "" {
-			b.WriteString(markdownBulletedText("trigger/deadline: "+consensus.NextActionTrigger, "") + "\n")
+			b.WriteString(markdownBulletedText("trigger/deadline: "+rewriteTechnicalTerms(consensus.NextActionTrigger), "") + "\n")
 		}
 		if strings.TrimSpace(consensus.NextActionSuccessMetric) != "" {
-			b.WriteString(markdownBulletedText("success metric: "+consensus.NextActionSuccessMetric, "") + "\n")
+			b.WriteString(markdownBulletedText("success metric: "+rewriteTechnicalTerms(consensus.NextActionSuccessMetric), "") + "\n")
 		}
 	}
 	if strings.TrimSpace(consensus.RequiredNextAction) != "" {
 		b.WriteString("\n### Required Next Action\n\n")
-		b.WriteString(markdownBulletedText(consensus.RequiredNextAction, "") + "\n")
+		b.WriteString(markdownBulletedText(rewriteTechnicalTerms(consensus.RequiredNextAction), "") + "\n")
 	}
 }
 
@@ -383,9 +395,20 @@ func sanitizeTurnContentForDisplay(content string) string {
 		if isHiddenDirectiveLine(trimmed) {
 			continue
 		}
-		visible = append(visible, trimmed)
+		visible = append(visible, rewriteTechnicalTerms(trimmed))
 	}
 	return strings.TrimSpace(strings.Join(visible, "\n"))
+}
+
+func rewriteTechnicalTerms(text string) string {
+	rewritten := strings.TrimSpace(text)
+	if rewritten == "" {
+		return ""
+	}
+	for _, rule := range technicalTermPlainRewrites {
+		rewritten = rule.pattern.ReplaceAllString(rewritten, rule.repl)
+	}
+	return rewritten
 }
 
 func stripEvidenceQualityMetadata(line string) string {

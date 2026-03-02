@@ -121,6 +121,15 @@ func TestBuildModeratorUserPromptIncludesNextSpeakerLens(t *testing.T) {
 
 func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	prompt := buildTurnSystemPrompt()
+	if !strings.Contains(prompt, "Adapt explanation depth to audience_mode from the user prompt") {
+		t.Fatalf("expected audience-mode adaptive guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "technical terms to <=3") {
+		t.Fatalf("expected relaxed technical-term limit guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Include one plain-language user-impact sentence") {
+		t.Fatalf("expected user-impact sentence guidance, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "books, papers, and articles") {
 		t.Fatalf("expected master knowledge source guidance, prompt=%q", prompt)
 	}
@@ -181,6 +190,12 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
 		t.Fatalf("expected explicit termination signals, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Do not translate or rename machine control labels") {
+		t.Fatalf("expected control-label non-translation guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Self-repair before final output") {
+		t.Fatalf("expected self-repair guidance for required control lines, prompt=%q", prompt)
+	}
 }
 
 func TestBuildOpeningSpeakerSelectorPrompts(t *testing.T) {
@@ -230,6 +245,12 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	if !strings.Contains(prompt, "Required line format and order") {
 		t.Fatalf("expected fixed moderator line-order guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Optional disambiguation lines") {
+		t.Fatalf("expected optional option-line guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "The 4 required lines remain mandatory") {
+		t.Fatalf("expected required-line preservation guidance, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "SYNTHESIS:") || !strings.Contains(prompt, "TENSION:") || !strings.Contains(prompt, "ASK:") {
 		t.Fatalf("expected explicit SYNTHESIS/TENSION/ASK line prefixes, prompt=%q", prompt)
 	}
@@ -256,6 +277,15 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "SCORECARD: coherence=<0-100>; executability=<0-100>; risk_coverage=<0-100>") {
 		t.Fatalf("expected periodic scorecard rubric guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Adapt wording depth to audience_mode") {
+		t.Fatalf("expected audience-mode adaptation guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not translate or rename required labels") {
+		t.Fatalf("expected moderator label non-translation guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Self-repair before final output") {
+		t.Fatalf("expected moderator self-repair guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Do not add prose before SYNTHESIS or after final metadata line") {
 		t.Fatalf("expected strict moderator boundary guidance, prompt=%q", prompt)
@@ -405,23 +435,29 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "choose one provisional option and include owner + trigger/deadline") {
 		t.Fatalf("expected convergence phase decision guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "without bracket labels like [evidence] or [inference]") {
-		t.Fatalf("expected anti-labeling guidance in turn objective, prompt=%q", prompt)
+	if !strings.Contains(prompt, "requested audience_mode: general") {
+		t.Fatalf("expected default general audience mode indicator, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "audience mode: explain so a non-expert can follow quickly") {
+		t.Fatalf("expected non-expert audience-mode guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "avoid unexplained jargon or acronyms") {
+		t.Fatalf("expected jargon/acronym guardrail, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "what changes for users if this is chosen") {
+		t.Fatalf("expected explicit user-impact guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "when claim reference is clear and verifiable") {
+		t.Fatalf("expected softened citation requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "CLOSE decision must use the snapshot above as source of truth") {
+		t.Fatalf("expected snapshot-first close gating guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "quality checkpoint required now") || !strings.Contains(prompt, "evidence_type=data|experience|assumption") {
 		t.Fatalf("expected quality-checkpoint guidance in turn objective, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "include ISSUE_UPDATE only when opening a new issue or when owner/deadline/blocker changes") {
+	if !strings.Contains(prompt, "include ISSUE_UPDATE only when opening a new issue or when owner/decide_by/blocker changes") {
 		t.Fatalf("expected conditional issue registry guidance in turn objective, prompt=%q", prompt)
-	}
-	if !strings.Contains(prompt, "include SELF_CHECK when bias/confidence risk is material") {
-		t.Fatalf("expected conditional self-check guidance in turn objective, prompt=%q", prompt)
-	}
-	if !strings.Contains(prompt, "keep narrative human-readable, and keep machine metadata lines standalone") {
-		t.Fatalf("expected narrative/metadata separation guidance in turn objective, prompt=%q", prompt)
-	}
-	if !strings.Contains(prompt, "metadata labels are machine-readable control data") {
-		t.Fatalf("expected metadata non-display policy guidance in turn objective, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "periodic meta-summary turn") {
 		t.Fatalf("expected periodic meta-summary cadence trigger, prompt=%q", prompt)
@@ -435,11 +471,11 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "CLOSE: yes|no") || !strings.Contains(prompt, "NEW_POINT: yes|no") {
 		t.Fatalf("expected explicit close/new-point objective, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "do not translate or rename any control-line label") {
+		t.Fatalf("expected label non-translation reminder in turn objective, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "unresolved_blockers<=1") || !strings.Contains(prompt, "unowned_issues=0") || !strings.Contains(prompt, "decide_by_signals>=1") {
 		t.Fatalf("expected quantitative close readiness rule, prompt=%q", prompt)
-	}
-	if !strings.Contains(prompt, "last two-turn claims") {
-		t.Fatalf("expected repeat guardrail in turn objective, prompt=%q", prompt)
 	}
 }
 
@@ -498,7 +534,7 @@ func TestBuildTurnUserPromptDeadlockModeWhenNoNewPointStreak(t *testing.T) {
 	if !strings.Contains(prompt, "deadlock signal: repeated no-new-point streak detected") {
 		t.Fatalf("expected deadlock signal guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "deadlock mode required now: include OPTION_A/OPTION_B micro decision table") {
+	if !strings.Contains(prompt, "deadlock mode required now: apply the system deadlock breaker (OPTION_A/OPTION_B table)") {
 		t.Fatalf("expected deadlock mode requirement, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "quality checkpoint required now") {
@@ -628,6 +664,9 @@ func TestBuildJudgeUserPromptIncludesFormatReminder(t *testing.T) {
 	if !strings.Contains(prompt, "Output format reminder:") {
 		t.Fatalf("expected output format reminder section, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "requested audience_mode: general") {
+		t.Fatalf("expected default general audience mode in judge prompt, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "return one minified JSON object on a single line only") {
 		t.Fatalf("expected minified single-line guidance, prompt=%q", prompt)
 	}
@@ -703,11 +742,68 @@ func TestBuildFinalModeratorSystemPromptIsDecisionOriented(t *testing.T) {
 	if !strings.Contains(prompt, "3-5 concise sentences") {
 		t.Fatalf("expected final response length guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "First sentence must be a plain-language verdict") {
+		t.Fatalf("expected plain-language first sentence guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "what/who/when format") {
+		t.Fatalf("expected concrete what/who/when action guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Avoid unexplained acronyms/jargon") {
+		t.Fatalf("expected anti-jargon guidance in final moderator prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not introduce new facts beyond the provided debate and judge context") {
+		t.Fatalf("expected no-new-facts guardrail in final moderator prompt, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "consensus score/rationale as confidence calibration") {
 		t.Fatalf("expected calibration guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "decision-oriented concluding sentence") {
 		t.Fatalf("expected decision-oriented ending guidance, prompt=%q", prompt)
+	}
+}
+
+func TestBuildTurnUserPromptExpertAudienceMode(t *testing.T) {
+	input := orchestrator.GenerateTurnInput{
+		Problem: "SLO 개선 전략",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "SRE", Role: "risk"},
+			{ID: "p2", Name: "PM", Role: "product"},
+		},
+		Speaker: persona.Persona{
+			ID:   "p1",
+			Name: "SRE",
+			Role: "risk",
+		},
+		AudienceMode: orchestrator.AudienceModeExpert,
+	}
+
+	prompt := buildTurnUserPrompt(input)
+	if !strings.Contains(prompt, "requested audience_mode: expert") {
+		t.Fatalf("expected expert audience mode indicator, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "audience mode: explain for expert readers with precise terminology and compact logic") {
+		t.Fatalf("expected expert audience guidance, prompt=%q", prompt)
+	}
+	if strings.Contains(prompt, "audience mode: explain so a non-expert can follow quickly") {
+		t.Fatalf("did not expect general audience guidance in expert mode, prompt=%q", prompt)
+	}
+}
+
+func TestBuildFinalModeratorUserPromptIncludesAudienceMode(t *testing.T) {
+	input := orchestrator.GenerateFinalModeratorInput{
+		Problem: "릴리즈 의사결정",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+		},
+		AudienceMode: orchestrator.AudienceModeExpert,
+	}
+
+	prompt := buildFinalModeratorUserPrompt(input)
+	if !strings.Contains(prompt, "requested audience_mode: expert") {
+		t.Fatalf("expected audience mode indicator in final moderator prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "expert mode: concise and precise closing summary") {
+		t.Fatalf("expected expert-mode final guidance, prompt=%q", prompt)
 	}
 }
 
@@ -769,7 +865,7 @@ func TestSummarizeCloseReadinessMergesIssueUpdatesByIssue(t *testing.T) {
 			SpeakerID:   "p1",
 			SpeakerName: "PM",
 			Type:        orchestrator.TurnTypePersona,
-			Content:     "ISSUE_UPDATE: payment-rollout | owner=unassigned | deadline=2026-03-15 | blocker=fraud rules",
+			Content:     "ISSUE_UPDATE: payment-rollout | owner=unassigned | decide_by=2026-03-15 | blocker=fraud rules",
 		},
 		{
 			Index:       2,
@@ -802,7 +898,7 @@ func TestBuildJudgeUserPromptIncludesDecisionStateSnapshot(t *testing.T) {
 				SpeakerID:   "p1",
 				SpeakerName: "PM",
 				Type:        orchestrator.TurnTypePersona,
-				Content:     "ISSUE_UPDATE: release-window | owner=pm | deadline=2026-03-20 | blocker=none",
+				Content:     "ISSUE_UPDATE: release-window | owner=pm | decide_by=2026-03-20 | blocker=none",
 			},
 			{
 				Index:       2,
@@ -817,7 +913,7 @@ func TestBuildJudgeUserPromptIncludesDecisionStateSnapshot(t *testing.T) {
 	if !strings.Contains(prompt, "Decision-state snapshot:") {
 		t.Fatalf("expected decision-state snapshot section, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "issue registry:") || !strings.Contains(prompt, "release-window: owner=pm; deadline=2026-03-20; blocker=none") {
+	if !strings.Contains(prompt, "issue registry:") || !strings.Contains(prompt, "release-window: owner=pm; decide_by=2026-03-20; blocker=none") {
 		t.Fatalf("expected issue registry summary in judge prompt, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "decide_by signal outside issue registry: present") {

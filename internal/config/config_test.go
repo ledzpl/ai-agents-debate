@@ -28,6 +28,9 @@ func TestFromEnvSuccess(t *testing.T) {
 	if cfg.BaseURL != "https://example.com" {
 		t.Fatalf("unexpected base url: %s", cfg.BaseURL)
 	}
+	if cfg.AudienceMode != DefaultAudienceMode {
+		t.Fatalf("unexpected audience mode default: %s", cfg.AudienceMode)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -45,6 +48,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("DEBATE_STREAM_TURN_BUFFER", "777")
 	t.Setenv("OPENAI_REQUEST_TIMEOUT", "90s")
 	t.Setenv("OPENAI_API_MAX_RETRIES", "5")
+	t.Setenv("DEBATE_AUDIENCE_MODE", "expert")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -89,6 +93,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	if cfg.APIMaxRetries != 5 {
 		t.Fatalf("unexpected retries: %d", cfg.APIMaxRetries)
 	}
+	if cfg.AudienceMode != "expert" {
+		t.Fatalf("unexpected audience mode: %s", cfg.AudienceMode)
+	}
 }
 
 func TestFromEnvInvalidOverride(t *testing.T) {
@@ -100,6 +107,19 @@ func TestFromEnvInvalidOverride(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 	if !strings.Contains(err.Error(), "DEBATE_CONSENSUS_THRESHOLD") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFromEnvInvalidAudienceMode(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("DEBATE_AUDIENCE_MODE", "beginner")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "DEBATE_AUDIENCE_MODE") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

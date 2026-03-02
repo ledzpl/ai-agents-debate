@@ -25,6 +25,7 @@ const (
 	DefaultStreamTurnBuffer   = 600
 	DefaultRequestTimeout     = 60 * time.Second
 	DefaultAPIMaxRetries      = 2
+	DefaultAudienceMode       = "general"
 )
 
 type Settings struct {
@@ -43,6 +44,7 @@ type Settings struct {
 	StreamTurnBuffer   int
 	RequestTimeout     time.Duration
 	APIMaxRetries      int
+	AudienceMode       string
 }
 
 func FromEnv() (Settings, error) {
@@ -67,6 +69,7 @@ func FromEnv() (Settings, error) {
 		StreamTurnBuffer:   DefaultStreamTurnBuffer,
 		RequestTimeout:     DefaultRequestTimeout,
 		APIMaxRetries:      DefaultAPIMaxRetries,
+		AudienceMode:       DefaultAudienceMode,
 	}
 
 	if v := strings.TrimSpace(os.Getenv("OPENAI_MODEL")); v != "" {
@@ -122,6 +125,10 @@ func FromEnv() (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
+	settings.AudienceMode, err = parseOptionalChoice("DEBATE_AUDIENCE_MODE", settings.AudienceMode, []string{"general", "expert"})
+	if err != nil {
+		return Settings{}, err
+	}
 
 	return settings, nil
 }
@@ -169,4 +176,17 @@ func parseOptionalDuration(env string, fallback time.Duration, valid func(time.D
 		return 0, fmt.Errorf("%s has invalid value: %s", env, v)
 	}
 	return v, nil
+}
+
+func parseOptionalChoice(env string, fallback string, allowed []string) (string, error) {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(env)))
+	if raw == "" {
+		return fallback, nil
+	}
+	for _, candidate := range allowed {
+		if raw == candidate {
+			return raw, nil
+		}
+	}
+	return "", fmt.Errorf("%s has invalid value: %s (allowed: %s)", env, raw, strings.Join(allowed, ", "))
 }
