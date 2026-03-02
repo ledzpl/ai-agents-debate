@@ -77,8 +77,8 @@ func shrinkInt(base int, reduce int, min int) int {
 func buildTurnSystemPrompt() string {
 	return strings.TrimSpace(`You are one persona in a multi-persona debate.
 Rules:
+- Priority if instructions conflict: control-line/output format rules > direct moderator request > decision progress > persona style.
 - Respond in the same language as the problem statement.
-- Contribute one concise, concrete argument.
 - Structure your turn as: core claim -> reason/mechanism -> practical implication.
 - Each turn body must include: one claim, one reason/mechanism, and one verification condition (metric, trigger, or falsifier).
 - Ground claims in observed evidence, inference, or assumption naturally, without bracket labels.
@@ -90,7 +90,6 @@ Rules:
 - Do not emit ISSUE_UPDATE or SELF_CHECK when nothing changed and no checkpoint is requested.
 - Keep the debate interactive: explicitly connect to one named speaker's prior claim (agree, refine, or challenge).
 - If a moderator question/request is provided, answer it in your first sentence before expanding.
-- When possible, address one strongest counterpoint from another speaker.
 - Before your main rebuttal, include one fair strongest-form summary of an opposing view.
 - Do this implicitly; do not mention prompt techniques or bracket-label taxonomies in output.
 - Add one new delta in each turn (new evidence, boundary condition, metric, dependency, or failure mode), not just restatement.
@@ -101,7 +100,6 @@ Rules:
 - If you mostly agree, push toward convergence with a concrete decision criterion or next step.
 - Cite 1-2 prior turns by index notation like [3] when relevant.
 - Prefer specific, falsifiable statements (assumptions, constraints, metrics, tradeoffs).
-- Reference at least one previous point when possible.
 - Do not repeat claims from your last two turns unless assumptions changed or new evidence is added.
 - If a metric/threshold is unchanged from your prior turn, cite it briefly instead of restating the full rationale.
 - Keep a clearly distinctive voice aligned with the persona profile, especially signature_lens if provided.
@@ -110,7 +108,6 @@ Rules:
 - Do not claim to be the real person, and do not invent specific titles/dates when you are unsure.
 - When your likely persona failure mode could distort this turn, include one short self-correction line:
   SELF_CHECK: <likely bias/failure mode> -> <mitigation in this turn>
-- End with one handoff sentence that helps the next speaker advance the debate.
 - End with one line: HANDOFF_ASK: <one concrete question the NEXT speaker must answer>.
 - End with one line: NEXT: <persona_id> (choose one participant id, not yourself; must match one participant id exactly).
 - If the target could be ambiguous, still choose one explicit id in NEXT and use HANDOFF_ASK to request disambiguation.
@@ -124,7 +121,6 @@ Rules:
 - The four control lines above must appear at the very end in that exact order.
 - Every 4th persona turn, include one short line before control lines:
   META_DELTA: changed=<what changed>; unchanged=<what is still unresolved>; next_question=<one must-answer question>
-- Keep machine metadata lines concise and separate from narrative body content.
 - Keep the response compact: body in 2-4 short sentences before control lines.
 - Avoid recap unless it changed the decision.
 - Return plain text only, without speaker labels or markdown.`)
@@ -148,20 +144,29 @@ func buildOpeningSpeakerSelectorUserPrompt(input orchestrator.SelectOpeningSpeak
 	b.WriteString(input.Problem)
 	b.WriteString("\n\nCandidates:\n")
 	for _, p := range input.Personas {
-		b.WriteString(fmt.Sprintf("- id: %s\n", p.ID))
-		b.WriteString(fmt.Sprintf("  name: %s\n", p.Name))
-		b.WriteString(fmt.Sprintf("  role: %s\n", p.Role))
+		id := strings.TrimSpace(p.ID)
+		name := strings.TrimSpace(p.Name)
+		role := strings.TrimSpace(p.Role)
+		b.WriteString(fmt.Sprintf("- id: %s\n", id))
+		if name != "" {
+			b.WriteString(fmt.Sprintf("  name: %s\n", name))
+		}
+		if role != "" {
+			b.WriteString(fmt.Sprintf("  role: %s\n", role))
+		}
 		if strings.TrimSpace(p.Stance) != "" {
 			b.WriteString("  stance: " + strings.TrimSpace(p.Stance) + "\n")
 		}
 		if strings.TrimSpace(p.Style) != "" {
 			b.WriteString("  style: " + strings.TrimSpace(p.Style) + "\n")
 		}
-		if len(p.Expertise) > 0 {
-			b.WriteString("  expertise: " + strings.Join(p.Expertise, ", ") + "\n")
+		expertise := normalizePromptList(p.Expertise)
+		if len(expertise) > 0 {
+			b.WriteString("  expertise: " + strings.Join(expertise, ", ") + "\n")
 		}
-		if len(p.SignatureLens) > 0 {
-			b.WriteString("  signature_lens: " + strings.Join(p.SignatureLens, ", ") + "\n")
+		signatureLens := normalizePromptList(p.SignatureLens)
+		if len(signatureLens) > 0 {
+			b.WriteString("  signature_lens: " + strings.Join(signatureLens, ", ") + "\n")
 		}
 		if strings.TrimSpace(p.MasterName) != "" {
 			b.WriteString("  master_name: " + strings.TrimSpace(p.MasterName) + "\n")
@@ -181,26 +186,35 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	b.WriteString("\n\n")
 
 	b.WriteString("Current speaker profile:\n")
-	b.WriteString(fmt.Sprintf("- id: %s\n- name: %s\n- role: %s\n- stance: %s\n", input.Speaker.ID, input.Speaker.Name, input.Speaker.Role, input.Speaker.Stance))
+	b.WriteString(fmt.Sprintf("- id: %s\n- name: %s\n- role: %s\n",
+		strings.TrimSpace(input.Speaker.ID),
+		strings.TrimSpace(input.Speaker.Name),
+		strings.TrimSpace(input.Speaker.Role),
+	))
+	if stance := strings.TrimSpace(input.Speaker.Stance); stance != "" {
+		b.WriteString("- stance: " + stance + "\n")
+	}
 	if strings.TrimSpace(input.Speaker.MasterName) != "" {
 		b.WriteString("- master_name: " + strings.TrimSpace(input.Speaker.MasterName) + "\n")
 		b.WriteString("- master usage requirement: ground this turn in the master's known books, papers, articles, or established frameworks.\n")
 	}
-	if input.Speaker.Style != "" {
-		b.WriteString("- style: " + input.Speaker.Style + "\n")
+	if style := strings.TrimSpace(input.Speaker.Style); style != "" {
+		b.WriteString("- style: " + style + "\n")
 	}
-	if len(input.Speaker.Expertise) > 0 {
-		b.WriteString("- expertise: " + strings.Join(input.Speaker.Expertise, ", ") + "\n")
+	expertise := normalizePromptList(input.Speaker.Expertise)
+	if len(expertise) > 0 {
+		b.WriteString("- expertise: " + strings.Join(expertise, ", ") + "\n")
 	}
-	if len(input.Speaker.Constraints) > 0 {
+	constraints := normalizePromptList(input.Speaker.Constraints)
+	if len(constraints) > 0 {
 		b.WriteString("- constraints:\n")
-		for _, constraint := range input.Speaker.Constraints {
+		for _, constraint := range constraints {
 			b.WriteString("  - " + constraint + "\n")
 		}
 	}
 	b.WriteString("- persona voice guardrail: use the expert name as style inspiration, not identity impersonation.\n")
 
-	signatureLens := input.Speaker.SignatureLens
+	signatureLens := normalizePromptList(input.Speaker.SignatureLens)
 	if len(signatureLens) > 0 {
 		b.WriteString("- signature lens (must be reflected in this turn):\n")
 		for _, lens := range signatureLens {
@@ -270,7 +284,6 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 		b.WriteString("- before your rebuttal, briefly summarize the strongest opposing view fairly without meta labels.\n")
 	}
 	b.WriteString("- do not repeat your last two-turn claims unless assumptions changed or evidence is new.\n")
-	b.WriteString("- each turn body must include one claim, one reason/mechanism, and one verification condition (metric/trigger/falsifier).\n")
 	b.WriteString("- keep narrative human-readable, and keep machine metadata lines standalone (ISSUE_UPDATE/META_DELTA/SELF_CHECK).\n")
 	if qualityCheckpointRequired {
 		b.WriteString("- quality checkpoint required now: include one evidence-quality clause (evidence_type=data|experience|assumption, confidence=low|medium|high) or one SELF_CHECK line.\n")
@@ -285,7 +298,6 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	b.WriteString("- include SELF_CHECK when bias/confidence risk is material for this turn.\n")
 	b.WriteString("- metadata labels are machine-readable control data; do not mention those label names inside narrative sentences.\n")
 	b.WriteString("- express evidence/inference/assumption naturally without bracket labels like [evidence] or [inference].\n")
-	b.WriteString("- if NEW_POINT=no in two consecutive persona turns, switch to decision mode: Option A vs B, choose one provisional option, and request one blocker check.\n")
 	if noNewPointStreak >= 2 {
 		b.WriteString("- deadlock mode required now: include OPTION_A/OPTION_B micro decision table with upside, risk, and falsifier experiment.\n")
 	}
@@ -340,7 +352,10 @@ Return exactly one JSON object with keys (in this exact order):
 - next_action_owner (string)
 - next_action_trigger_or_deadline (string)
 - next_action_success_metric (string)
-- Output format must be a single-line minified JSON object.
+- Output format must be a single-line minified JSON object (no newline characters).
+- JSON type constraints: reached must be unquoted true/false; score must be numeric 0..1 (not string, not percent); open_risks must be a JSON array.
+- Keys and string values must use standard JSON double quotes.
+- JSON template: {"reached":false,"score":0.0,"summary":"...","rationale":"...","open_risks":[],"next_action_owner":"unassigned","next_action_trigger_or_deadline":"next cycle","next_action_success_metric":"completion criteria documented"}
 - Self-repair before final output: if your draft is malformed/truncated or has missing keys, rewrite once and return only valid JSON.
 - No markdown/code fence, no commentary, no trailing comma, no extra keys, and the final character must be }.`)
 }
@@ -349,21 +364,21 @@ func buildModeratorSystemPrompt() string {
 	return strings.TrimSpace(`You are the moderator of a multi-persona debate.
 Rules:
 - Respond in the same language as the problem statement.
-- Keep intervention compact: 3 core lines (+ optional scorecard lines).
+- Keep intervention compact: exactly 4 required lines (+ optional scorecard lines).
 - Use the provided "Debate memory snapshot" as primary grounding context; treat the latest statement as secondary evidence.
 - Avoid recency bias: do not treat the latest statement as the dominant view unless it is corroborated by earlier turns.
 - Keep your intervention structured as: synthesis -> unresolved tradeoff -> targeted next-speaker question.
-- Line 1 (SYNTHESIS): summarize the trajectory across multiple recent turns in 1 short sentence.
-- Line 2 (TENSION): highlight one highest-impact unresolved tradeoff and what evidence is still missing.
-- Line 3 (ASK): direct the next speaker with one decision-forcing prompt tailored to that speaker's signature style.
+- Required line format and order:
+  SYNTHESIS: <1 short sentence on multi-turn trajectory>
+  TENSION: <highest-impact unresolved tradeoff + missing evidence>
+  ASK: <decision-forcing prompt tailored to the next speaker style>
+  DECISION_CHECK: choose Option A or B; metric_threshold=<number/condition>; decide_by=<time or trigger>.
 - Explicitly account for at least one supporting point and one tension/tradeoff from different speakers when possible.
 - In the handoff, name at least one specific prior claim (speaker + idea) that the next speaker must respond to.
 - Close the loop on your previous intervention: briefly state whether it was answered, partially answered, or still open.
 - Cite speaker names when possible so the handoff is traceable.
 - Cite at most two turn indexes (e.g., [5], [7]) for grounding instead of long restatement.
 - Do not introduce external facts not grounded in the provided debate context.
-- Use fixed question format at the end:
-  DECISION_CHECK: choose Option A or B; metric_threshold=<number/condition>; decide_by=<time or trigger>.
 - DECISION_CHECK must include both metric_threshold and decide_by with concrete non-placeholder values (no TBD/unknown/later/soon).
 - metric_threshold must be numeric or explicit condition (for example >=2.5%, p95<300ms, conversion>=15%).
 - decide_by must be an explicit deadline or trigger condition.
@@ -373,7 +388,8 @@ Rules:
   SCORECARD_REASON: <one short reason tying score deltas to recent turns>
 - SCORECARD and SCORECARD_REASON are machine-readable metadata lines; keep them standalone and out of narrative prose.
 - If the next speaker has master_name, explicitly ask them to apply that master's known books, papers, or articles.
-- Keep it concise and actionable: about 3 core lines / up to 5 short sentences.
+- Keep it concise and actionable: about 4 core lines / up to 6 short sentences.
+- Do not add prose before SYNTHESIS or after final metadata line.
 - Return plain text only, without markdown.`)
 }
 
@@ -397,7 +413,8 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 
 	b.WriteString("\nModerator balancing guidance:\n")
 	b.WriteString("- treat the latest persona statement as one data point, not the whole debate.\n")
-	b.WriteString("- use compact 3-block output: SYNTHESIS -> TENSION -> ASK.\n")
+	b.WriteString("- use compact 4-line output: SYNTHESIS -> TENSION -> ASK -> DECISION_CHECK.\n")
+	b.WriteString("- use exact standalone prefixes in order: SYNTHESIS:, TENSION:, ASK:, DECISION_CHECK:.\n")
 	b.WriteString("- ground synthesis/tradeoff in multiple recent turns and speakers.\n")
 	b.WriteString("- explicitly point the next speaker to at least one prior claim they must answer.\n")
 	b.WriteString("- ask for decision-ready output (metric/trigger/owner/option) rather than generic opinion.\n")
@@ -427,7 +444,7 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 		b.WriteString("- next speaker master_name: " + strings.TrimSpace(input.NextSpeaker.MasterName) + "\n")
 		b.WriteString("- moderator instruction: ask the next speaker to use ideas from this master's books, papers, or articles.\n")
 	}
-	nextSpeakerLens := input.NextSpeaker.SignatureLens
+	nextSpeakerLens := normalizePromptList(input.NextSpeaker.SignatureLens)
 	if len(nextSpeakerLens) > 0 {
 		b.WriteString("- next speaker signature lens:\n")
 		for _, lens := range nextSpeakerLens {
@@ -516,8 +533,26 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	b.WriteString("- return one minified JSON object on a single line only.\n")
 	b.WriteString("- key order: reached, score, summary, rationale, open_risks, next_action_owner, next_action_trigger_or_deadline, next_action_success_metric.\n")
 	b.WriteString("- never omit keys; if uncertain, use placeholders: next_action_owner=\"unassigned\", next_action_trigger_or_deadline=\"next cycle\", next_action_success_metric=\"completion criteria documented\".\n")
+	b.WriteString("- type constraints: reached is boolean, score is numeric 0..1 (not percent/string), open_risks is an array (use []).\n")
 	b.WriteString("- no markdown/code fence, and the final character must be }.\n")
 	return b.String()
+}
+
+func normalizePromptList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func buildTurnInteractionSnapshot(turns []orchestrator.Turn, speaker persona.Persona, budget promptBudget) string {
@@ -926,7 +961,19 @@ func samePersonaSpeaker(turn orchestrator.Turn, p persona.Persona) bool {
 }
 
 func participantPromptLine(p persona.Persona) string {
-	line := fmt.Sprintf("- %s (%s): %s", persona.DisplayName(p), p.ID, p.Role)
+	displayName := strings.TrimSpace(persona.DisplayName(p))
+	id := strings.TrimSpace(p.ID)
+	role := strings.TrimSpace(p.Role)
+	if displayName == "" {
+		displayName = id
+	}
+	line := "- " + displayName
+	if id != "" {
+		line += fmt.Sprintf(" (%s)", id)
+	}
+	if role != "" {
+		line += ": " + role
+	}
 	if strings.TrimSpace(p.MasterName) != "" {
 		line += " | master_name=" + strings.TrimSpace(p.MasterName)
 	}

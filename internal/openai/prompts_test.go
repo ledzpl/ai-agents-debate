@@ -227,6 +227,12 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	if !strings.Contains(prompt, "synthesis -> unresolved tradeoff -> targeted next-speaker question") {
 		t.Fatalf("expected moderator structure guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Required line format and order") {
+		t.Fatalf("expected fixed moderator line-order guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "SYNTHESIS:") || !strings.Contains(prompt, "TENSION:") || !strings.Contains(prompt, "ASK:") {
+		t.Fatalf("expected explicit SYNTHESIS/TENSION/ASK line prefixes, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "Do not introduce external facts") {
 		t.Fatalf("expected no-external-facts guidance, prompt=%q", prompt)
 	}
@@ -250,6 +256,9 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "SCORECARD: coherence=<0-100>; executability=<0-100>; risk_coverage=<0-100>") {
 		t.Fatalf("expected periodic scorecard rubric guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not add prose before SYNTHESIS or after final metadata line") {
+		t.Fatalf("expected strict moderator boundary guidance, prompt=%q", prompt)
 	}
 }
 
@@ -598,6 +607,12 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	if !strings.Contains(prompt, "Self-repair before final output") {
 		t.Fatalf("expected malformed-json self-repair guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "JSON type constraints: reached must be unquoted true/false") {
+		t.Fatalf("expected json primitive-type constraints, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "JSON template: {\"reached\":false") {
+		t.Fatalf("expected json template guidance, prompt=%q", prompt)
+	}
 }
 
 func TestBuildJudgeUserPromptIncludesFormatReminder(t *testing.T) {
@@ -622,8 +637,64 @@ func TestBuildJudgeUserPromptIncludesFormatReminder(t *testing.T) {
 	if !strings.Contains(prompt, "never omit keys; if uncertain, use placeholders") {
 		t.Fatalf("expected placeholder fallback reminder, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "type constraints: reached is boolean, score is numeric 0..1") {
+		t.Fatalf("expected type constraint reminder, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "final character must be }") {
 		t.Fatalf("expected explicit final brace guidance, prompt=%q", prompt)
+	}
+}
+
+func TestBuildTurnUserPromptSkipsEmptySpeakerFields(t *testing.T) {
+	input := orchestrator.GenerateTurnInput{
+		Problem: "가격 정책 실험",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+			{ID: "p2", Name: "Risk", Role: "risk"},
+		},
+		Speaker: persona.Persona{
+			ID:          "p1",
+			Name:        "PM",
+			Role:        "product",
+			Stance:      "   ",
+			Style:       " ",
+			Expertise:   []string{"  ", "pricing"},
+			Constraints: []string{"", "법적 검토 필요"},
+		},
+	}
+
+	prompt := buildTurnUserPrompt(input)
+	if strings.Contains(prompt, "- stance: \n") {
+		t.Fatalf("did not expect blank stance field, prompt=%q", prompt)
+	}
+	if strings.Contains(prompt, "- style: \n") {
+		t.Fatalf("did not expect blank style field, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "- expertise: pricing") {
+		t.Fatalf("expected trimmed expertise list, prompt=%q", prompt)
+	}
+	if strings.Contains(prompt, "- expertise: ,") {
+		t.Fatalf("did not expect empty expertise item, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "  - 법적 검토 필요") {
+		t.Fatalf("expected trimmed constraints item, prompt=%q", prompt)
+	}
+	if strings.Contains(prompt, "  - \n") {
+		t.Fatalf("did not expect blank constraints item, prompt=%q", prompt)
+	}
+}
+
+func TestParticipantPromptLineOmitsEmptyRoleNoise(t *testing.T) {
+	line := participantPromptLine(persona.Persona{
+		ID:   "p1",
+		Name: "PM",
+		Role: "   ",
+	})
+	if strings.Contains(line, ": ") {
+		t.Fatalf("did not expect empty role suffix, line=%q", line)
+	}
+	if !strings.Contains(line, "PM (p1)") {
+		t.Fatalf("expected name and id, line=%q", line)
 	}
 }
 
