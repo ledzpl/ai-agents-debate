@@ -152,6 +152,13 @@
         if (isListMarkerOnly(trimmed)) {
           continue;
         }
+        const readablePayload = extractReadableDirectivePayload(trimmed);
+        if (readablePayload !== null) {
+          if (readablePayload) {
+            visible.push(readablePayload);
+          }
+          continue;
+        }
         if (isHiddenDirectiveLine(trimmed)) {
           continue;
         }
@@ -407,6 +414,44 @@
       }
       const rest = line.slice(key.length).trimStart();
       return rest.startsWith(":") || rest.startsWith("=") || rest.startsWith("：");
+    }
+
+    function extractReadableDirectivePayload(line) {
+      const candidate = normalizeDirectiveCandidate(line);
+      if (!candidate) {
+        return null;
+      }
+      const normalized = candidate.toLowerCase();
+      const keys = [
+        "synthesis",
+        "tension",
+        "ask",
+        "decision_check",
+        "decision-check",
+        "persuasion_check",
+        "persuasion-check"
+      ];
+      for (const key of keys) {
+        if (!hasDirectivePrefix(normalized, key)) {
+          continue;
+        }
+        return extractDirectivePayload(candidate, key);
+      }
+      return null;
+    }
+
+    function extractDirectivePayload(candidate, key) {
+      const rest = candidate.slice(key.length).trimStart();
+      if (!rest) {
+        return "";
+      }
+      if (rest.startsWith(":") || rest.startsWith("=")) {
+        return rest.slice(1).trim();
+      }
+      if (rest.startsWith("：")) {
+        return rest.slice(1).trim();
+      }
+      return "";
     }
 
     function normalizeDirectiveCandidate(line) {

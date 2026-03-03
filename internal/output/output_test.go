@@ -251,6 +251,11 @@ func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 		"일반 본문",
 		"중간 판단 (evidence_type=assumption, confidence=medium).",
 		"추정 근거 (assumption, confidence=medium).",
+		"SYNTHESIS: 지금은 속도보다 안전이 우선",
+		"  TENSION: 출시 일정과 안정성 기준 충돌",
+		"- ASK: 다음 턴에서 확정할 임계값은?",
+		"1. DECISION_CHECK: choose Option A or B; metric_threshold=p95<300ms; decide_by=3일",
+		"PERSUASION_CHECK: adopted_from=[7]; remaining_gap=none",
 		"- issue_update=owner=unassigned",
 		"- persuasion_update: changed=yes; adopted=가드레일 우선; rationale=장애 비용; remaining_gap=none",
 		"> meta_delta: changed=ab-test",
@@ -264,7 +269,17 @@ func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 	}, "\n")
 
 	got := sanitizeTurnContentForDisplay(input)
-	want := "일반 본문\n중간 판단\n추정 근거\n결론 라인"
+	want := strings.Join([]string{
+		"일반 본문",
+		"중간 판단",
+		"추정 근거",
+		"지금은 속도보다 안전이 우선",
+		"출시 일정과 안정성 기준 충돌",
+		"다음 턴에서 확정할 임계값은?",
+		"choose Option A or B; metric_threshold=응답속도 상위 구간(p95)<300ms; decide_by=3일",
+		"adopted_from=[7]; remaining_gap=none",
+		"결론 라인",
+	}, "\n")
 	if got != want {
 		t.Fatalf("unexpected sanitized content: got %q want %q", got, want)
 	}
