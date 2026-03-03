@@ -273,7 +273,10 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 	if openingShouldStop {
 		return o.finalizeWithModerator(ctx, &res, started, openingStopStatus, onTurn)
 	}
+	return o.runDebateLoop(ctx, started, &res, normalized, openingSpeakerIndex, onTurn)
+}
 
+func (o *Orchestrator) runDebateLoop(ctx context.Context, started time.Time, res *Result, normalized []persona.Persona, openingSpeakerIndex int, onTurn func(Turn)) (Result, error) {
 	effectiveMaxTurns := o.cfg.MaxTurns
 	if effectiveMaxTurns <= 0 {
 		effectiveMaxTurns = o.cfg.UnlimitedHardMaxTurns
@@ -286,25 +289,25 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 
 	for i := 0; ; i++ {
 		if err := ctx.Err(); err != nil {
-			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("debate canceled: %w", err)
+			finalizeResult(res, started, StatusError)
+			return *res, fmt.Errorf("debate canceled: %w", err)
 		}
 
 		if status, shouldStop := o.preTurnStatus(started, i, effectiveMaxTurns); shouldStop {
-			return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+			return o.finalizeWithModerator(ctx, res, started, status, onTurn)
 		}
 
 		turnNo := i + 1
 		speaker := normalized[currentSpeakerIndex]
 		stepCtx, cancel := o.callContext(ctx, started)
-		personaTurn, err := o.generatePersonaTurn(stepCtx, &res, normalized, speaker, turnNo)
+		personaTurn, err := o.generatePersonaTurn(stepCtx, res, normalized, speaker, turnNo)
 		cancel()
 		if err != nil {
 			if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
-				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+				return o.finalizeWithModerator(ctx, res, started, status, onTurn)
 			}
-			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("generate turn %d: %w", turnNo, err)
+			finalizeResult(res, started, StatusError)
+			return *res, fmt.Errorf("generate turn %d: %w", turnNo, err)
 		}
 		res.Turns = append(res.Turns, personaTurn)
 		if onTurn != nil {
@@ -313,40 +316,40 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		terminationSignals.observe(personaTurn)
 
 		if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
-			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
+			return o.finalizeWithModerator(ctx, res, started, StatusTokenLimitReached, onTurn)
 		}
 
 		judgedThisTurn := false
 		if o.shouldJudgeAtTurn(i, len(normalized), directHandoffMode) {
 			judgedThisTurn = true
-			status, done, err := o.judgeTurn(ctx, started, &res, normalized, turnNo, &progress)
+			status, done, err := o.judgeTurn(ctx, started, res, normalized, turnNo, &progress)
 			if err != nil {
-				finalizeResult(&res, started, StatusError)
-				return res, err
+				finalizeResult(res, started, StatusError)
+				return *res, err
 			}
 			if done {
-				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+				return o.finalizeWithModerator(ctx, res, started, status, onTurn)
 			}
 			if directHandoffMode && progress.noProgressJudges >= directHandoffNoProgressLimit(len(normalized), o.cfg.MaxNoProgressJudges) {
-				return o.finalizeWithModerator(ctx, &res, started, StatusNoProgressReached, onTurn)
+				return o.finalizeWithModerator(ctx, res, started, StatusNoProgressReached, onTurn)
 			}
 		}
 		if terminationSignals.shouldSuggestStop(len(normalized)) {
 			if !judgedThisTurn {
-				status, done, err := o.judgeTurn(ctx, started, &res, normalized, turnNo, &progress)
+				status, done, err := o.judgeTurn(ctx, started, res, normalized, turnNo, &progress)
 				if err != nil {
-					finalizeResult(&res, started, StatusError)
-					return res, err
+					finalizeResult(res, started, StatusError)
+					return *res, err
 				}
 				if done {
-					return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+					return o.finalizeWithModerator(ctx, res, started, status, onTurn)
 				}
 			}
-			return o.finalizeWithModerator(ctx, &res, started, StatusNoProgressReached, onTurn)
+			return o.finalizeWithModerator(ctx, res, started, StatusNoProgressReached, onTurn)
 		}
 
 		if !hasNextPersonaTurn(i, effectiveMaxTurns) {
-			return o.finalizeWithModerator(ctx, &res, started, StatusMaxTurnsReached, onTurn)
+			return o.finalizeWithModerator(ctx, res, started, StatusMaxTurnsReached, onTurn)
 		}
 
 		fallbackNextSpeakerIndex := (currentSpeakerIndex + 1) % len(normalized)
@@ -362,21 +365,21 @@ func (o *Orchestrator) Run(ctx context.Context, problem string, personas []perso
 		}
 		nextSpeaker := normalized[nextSpeakerIndex]
 		stepCtx, cancel = o.callContext(ctx, started)
-		moderatorTurn, err := o.generateModeratorTurn(stepCtx, &res, normalized, personaTurn, nextSpeaker, turnNo)
+		moderatorTurn, err := o.generateModeratorTurn(stepCtx, res, normalized, personaTurn, nextSpeaker, turnNo)
 		cancel()
 		if err != nil {
 			if status, isDurationStop := o.durationStatusOnLLMError(started, err); isDurationStop {
-				return o.finalizeWithModerator(ctx, &res, started, status, onTurn)
+				return o.finalizeWithModerator(ctx, res, started, status, onTurn)
 			}
-			finalizeResult(&res, started, StatusError)
-			return res, fmt.Errorf("generate moderator after turn %d: %w", turnNo, err)
+			finalizeResult(res, started, StatusError)
+			return *res, fmt.Errorf("generate moderator after turn %d: %w", turnNo, err)
 		}
 		res.Turns = append(res.Turns, moderatorTurn)
 		if onTurn != nil {
 			onTurn(moderatorTurn)
 		}
 		if reachedTokenLimit(res.Metrics.TotalTokens, o.cfg.MaxTotalTokens) {
-			return o.finalizeWithModerator(ctx, &res, started, StatusTokenLimitReached, onTurn)
+			return o.finalizeWithModerator(ctx, res, started, StatusTokenLimitReached, onTurn)
 		}
 		currentSpeakerIndex = nextSpeakerIndex
 		directHandoffMode = false

@@ -20,6 +20,9 @@ const (
 	defaultAddr       = ":8080"
 	maxRequestBytes   = 2 * 1024 * 1024
 	serverStopTimeout = 5 * time.Second
+	serverReadTimeout = 30 * time.Second
+	serverIdleTimeout = 120 * time.Second
+	serverMaxHeader   = 1 << 20
 	defaultRunTimeout = 30 * time.Minute
 	defaultTurnBuffer = 600
 )
@@ -168,8 +171,12 @@ func (a *App) Start(ctx context.Context, addr string) error {
 	}
 
 	server := &http.Server{
-		Addr:    addr,
-		Handler: a.Handler(),
+		Addr:              addr,
+		Handler:           a.Handler(),
+		ReadHeaderTimeout: serverReadTimeout,
+		ReadTimeout:       serverReadTimeout,
+		IdleTimeout:       serverIdleTimeout,
+		MaxHeaderBytes:    serverMaxHeader,
 	}
 
 	go func() {
