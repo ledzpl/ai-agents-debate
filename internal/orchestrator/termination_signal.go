@@ -3,14 +3,18 @@ package orchestrator
 import "strings"
 
 type turnTerminationSignal struct {
-	closeVote *bool
-	newPoint  *bool
+	closeVote         *bool
+	newPoint          *bool
+	persuasionAdopted bool
+	boundedExperiment bool
 }
 
 type terminationSignalTracker struct {
 	latestCloseBySpeaker map[string]bool
 	noNewPointStreak     int
 	observedPersonaTurns int
+	hasPersuasionSignal  bool
+	hasExperimentSignal  bool
 }
 
 func newTerminationSignalTracker() terminationSignalTracker {
@@ -32,6 +36,12 @@ func (t *terminationSignalTracker) observe(turn Turn) {
 			t.latestCloseBySpeaker[key] = *signal.closeVote
 		}
 	}
+	if signal.persuasionAdopted {
+		t.hasPersuasionSignal = true
+	}
+	if signal.boundedExperiment {
+		t.hasExperimentSignal = true
+	}
 
 	if signal.newPoint == nil {
 		// Missing signal should not erase existing stagnation evidence.
@@ -52,6 +62,9 @@ func (t *terminationSignalTracker) shouldSuggestStop(personaCount int) bool {
 		return false
 	}
 	if t.closeYesCount() < requiredCloseVotes(personaCount) {
+		return false
+	}
+	if !t.hasPersuasionSignal && !t.hasExperimentSignal {
 		return false
 	}
 
@@ -82,7 +95,8 @@ func requiredCloseVotes(personaCount int) int {
 func parseTurnTerminationSignal(content string) turnTerminationSignal {
 	lines := nonEmptyAllLines(content)
 	var signal turnTerminationSignal
-	for _, line := range lines {
+	for _, raw := range lines {
+		line := normalizeTerminationDirectiveLine(raw)
 		if value, ok := parseDirectiveBool(line, "CLOSE:", "CLOSE=", "종료:", "토론종료:"); ok {
 			v := value
 			signal.closeVote = &v
@@ -91,8 +105,120 @@ func parseTurnTerminationSignal(content string) turnTerminationSignal {
 			v := value
 			signal.newPoint = &v
 		}
+		if !signal.persuasionAdopted && hasPersuasionAdoptionLine(line) {
+			signal.persuasionAdopted = true
+		}
+		if !signal.boundedExperiment && hasBoundedExperimentLine(line) {
+			signal.boundedExperiment = true
+		}
 	}
 	return signal
+}
+
+func hasPersuasionAdoptionLine(line string) bool {
+	rest, ok := trimPrefixFold(strings.TrimSpace(line), "PERSUASION_UPDATE:")
+	if !ok {
+		return false
+	}
+	changedRaw := extractDirectiveAssignmentValue(rest, "changed")
+	changed, changedOK := parseBoolToken(strings.ToLower(strings.TrimSpace(changedRaw)))
+	if !changedOK || !changed {
+		return false
+	}
+	adopted := extractDirectiveAssignmentValue(rest, "adopted")
+	return !isNoneLikeDirectiveValue(adopted)
+}
+
+func hasBoundedExperimentLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if !strings.Contains(lower, "success_metric=") || !strings.Contains(lower, "stop_condition=") {
+		return false
+	}
+	if !strings.Contains(lower, "owner=") {
+		return false
+	}
+	return strings.Contains(lower, "decide_by=") || strings.Contains(lower, "deadline=")
+}
+
+func extractDirectiveAssignmentValue(line string, key string) string {
+	if line == "" || key == "" {
+		return ""
+	}
+	lowerLine := strings.ToLower(line)
+	target := strings.ToLower(strings.TrimSpace(key)) + "="
+	searchFrom := 0
+	for {
+		relative := strings.Index(lowerLine[searchFrom:], target)
+		if relative < 0 {
+			return ""
+		}
+		idx := searchFrom + relative
+		if idx > 0 && isDirectiveKeyChar(lowerLine[idx-1]) {
+			searchFrom = idx + 1
+			continue
+		}
+		value := strings.TrimSpace(line[idx+len(target):])
+		if value == "" {
+			return ""
+		}
+		if cut := strings.IndexAny(value, ";|"); cut >= 0 {
+			value = strings.TrimSpace(value[:cut])
+		}
+		return strings.TrimSpace(strings.Trim(value, "\"'`"))
+	}
+}
+
+func isDirectiveKeyChar(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') ||
+		(ch >= '0' && ch <= '9') ||
+		ch == '_' ||
+		ch == '-'
+}
+
+func isNoneLikeDirectiveValue(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none", "n/a", "na", "-", "unknown", "tbd", "no":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeTerminationDirectiveLine(line string) string {
+	value := strings.TrimSpace(line)
+	for value != "" {
+		prev := value
+		lower := strings.ToLower(value)
+
+		if strings.HasPrefix(lower, "- [ ] ") || strings.HasPrefix(lower, "- [x] ") {
+			value = strings.TrimSpace(value[6:])
+		}
+		if strings.HasPrefix(value, ">") {
+			value = strings.TrimSpace(value[1:])
+		}
+		if strings.HasPrefix(value, "- ") || strings.HasPrefix(value, "* ") || strings.HasPrefix(value, "+ ") {
+			value = strings.TrimSpace(value[2:])
+		}
+		if idx := strings.Index(value, ". "); idx > 0 && isShortNumericPrefix(value[:idx]) {
+			value = strings.TrimSpace(value[idx+2:])
+		}
+		if value == prev {
+			break
+		}
+	}
+	return value
+}
+
+func isShortNumericPrefix(prefix string) bool {
+	if prefix == "" || len(prefix) > 3 {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		if prefix[i] < '0' || prefix[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseDirectiveBool(line string, prefixes ...string) (bool, bool) {

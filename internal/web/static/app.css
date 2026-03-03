@@ -696,6 +696,93 @@ textarea#problem:focus {
   box-shadow: 0 0 0 3px rgba(36, 86, 211, 0.2);
 }
 
+.advanced-panel {
+  border: 1px solid rgba(26, 45, 89, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 8px 10px;
+}
+
+.advanced-panel summary {
+  cursor: pointer;
+  color: var(--ink-800);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  list-style: none;
+}
+
+.advanced-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-panel summary::before {
+  content: "▸ ";
+  color: var(--ink-600);
+}
+
+.advanced-panel[open] summary::before {
+  content: "▾ ";
+}
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.advanced-grid label {
+  font-size: 11px;
+  color: var(--ink-700);
+  font-weight: 700;
+}
+
+.advanced-grid input,
+.advanced-grid select {
+  width: 100%;
+  border: 1px solid rgba(26, 45, 89, 0.28);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink-900, #10192e);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.advanced-grid input:focus,
+.advanced-grid select:focus {
+  outline: none;
+  border-color: var(--cobalt-600);
+  box-shadow: 0 0 0 3px rgba(36, 86, 211, 0.14);
+}
+
+.advanced-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+button#advancedResetBtn {
+  appearance: none;
+  border: 1px solid rgba(26, 45, 89, 0.25);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink-700);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+button#advancedResetBtn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(36, 86, 211, 0.4);
+  box-shadow: 0 8px 16px rgba(16, 38, 92, 0.14);
+}
+
 .control-row {
   display: flex;
   align-items: center;

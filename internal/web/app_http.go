@@ -19,6 +19,9 @@ func decodeDebateRequest(body io.Reader) (debateRequest, error) {
 	if req.Problem == "" {
 		return debateRequest{}, errors.New("problem is required")
 	}
+	if err := req.validateRuntimeTuning(); err != nil {
+		return debateRequest{}, err
+	}
 	return req, nil
 }
 

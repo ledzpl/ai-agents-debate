@@ -44,6 +44,50 @@
             </div>
             <div class="compose-box">
               <textarea id="problem" placeholder="토론하고 싶은 주제를 입력하세요..." aria-label="토론 주제"></textarea>
+              <details class="advanced-panel">
+                <summary>Advanced 설정</summary>
+                <div class="advanced-grid">
+                  <label for="audienceMode">Audience Mode</label>
+                  <select id="audienceMode" aria-label="audience mode">
+                    <option value="">서버 기본값</option>
+                    <option value="general">general</option>
+                    <option value="expert">expert</option>
+                  </select>
+
+                  <label for="maxTurns">Max Turns</label>
+                  <input id="maxTurns" type="number" min="0" placeholder="예: 12 (0=unbounded)" />
+
+                  <label for="consensusThreshold">Consensus Threshold</label>
+                  <input id="consensusThreshold" type="number" min="0" max="1" step="0.01" placeholder="예: 0.85" />
+
+                  <label for="maxNoProgressJudges">Max No Progress Judges</label>
+                  <input id="maxNoProgressJudges" type="number" min="1" placeholder="예: 6" />
+
+                  <label for="noProgressEpsilon">No Progress Epsilon</label>
+                  <input id="noProgressEpsilon" type="number" min="0.000001" step="0.001" placeholder="예: 0.01" />
+
+                  <label for="unlimitedHardMaxTurns">Unlimited Hard Max Turns</label>
+                  <input id="unlimitedHardMaxTurns" type="number" min="1" placeholder="예: 400" />
+
+                  <label for="directHandoffJudgeEvery">Direct Handoff Judge Every</label>
+                  <input id="directHandoffJudgeEvery" type="number" min="1" placeholder="예: 2" />
+
+                  <label for="llmHistoryTurnWindow">LLM History Turn Window</label>
+                  <input id="llmHistoryTurnWindow" type="number" min="1" placeholder="예: 120" />
+
+                  <label for="maxDurationSeconds">Max Duration (sec)</label>
+                  <input id="maxDurationSeconds" type="number" min="1" placeholder="예: 1200" />
+
+                  <label for="maxTotalTokens">Max Total Tokens</label>
+                  <input id="maxTotalTokens" type="number" min="1" placeholder="예: 120000" />
+
+                  <label for="runTimeoutSeconds">Run Timeout (sec)</label>
+                  <input id="runTimeoutSeconds" type="number" min="1" placeholder="예: 1800" />
+                </div>
+                <div class="advanced-actions">
+                  <button id="advancedResetBtn" type="button">고급 설정 초기화</button>
+                </div>
+              </details>
               <div class="control-row">
                 <div class="meta" id="statusText">대기 중</div>
                 <div class="action-buttons">

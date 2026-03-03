@@ -227,6 +227,16 @@ func New(llm LLMClient, cfg Config) *Orchestrator {
 	return &Orchestrator{llm: llm, cfg: cfg}
 }
 
+// RunWithConfig runs a single debate using the provided runtime config.
+// The orchestrator keeps the same LLM client and applies normalized config defaults.
+func (o *Orchestrator) RunWithConfig(ctx context.Context, problem string, personas []persona.Persona, cfg Config, onTurn func(Turn)) (Result, error) {
+	if o == nil || isNilLLMClient(o.llm) {
+		return Result{}, errors.New("llm client is required")
+	}
+	runtime := New(o.llm, cfg)
+	return runtime.Run(ctx, problem, personas, onTurn)
+}
+
 func normalizeAudienceMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case AudienceModeExpert:

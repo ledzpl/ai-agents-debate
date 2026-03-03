@@ -218,6 +218,7 @@ func TestFormatResultMarkdownHidesDirectiveMetadataLines(t *testing.T) {
 				Content: strings.Join([]string{
 					"핵심 주장 라인",
 					"- ISSUE_UPDATE: owner=unassigned",
+					"- PERSUASION_UPDATE: changed=yes; adopted=가드레일 우선; rationale=장애 비용; remaining_gap=none",
 					"> META_DELTA: changed=ab-test",
 					"- (evidence_type=assumption, confidence=medium)",
 					"(assumption, confidence=medium)",
@@ -235,6 +236,7 @@ func TestFormatResultMarkdownHidesDirectiveMetadataLines(t *testing.T) {
 		t.Fatalf("expected visible discussion lines to remain, got %q", md)
 	}
 	if strings.Contains(md, "ISSUE_UPDATE:") ||
+		strings.Contains(md, "PERSUASION_UPDATE:") ||
 		strings.Contains(md, "META_DELTA:") ||
 		strings.Contains(md, "evidence_type=assumption") ||
 		strings.Contains(md, "confidence=medium") ||
@@ -250,6 +252,7 @@ func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 		"중간 판단 (evidence_type=assumption, confidence=medium).",
 		"추정 근거 (assumption, confidence=medium).",
 		"- issue_update=owner=unassigned",
+		"- persuasion_update: changed=yes; adopted=가드레일 우선; rationale=장애 비용; remaining_gap=none",
 		"> meta_delta: changed=ab-test",
 		"- (evidence_type=assumption, confidence=medium)",
 		"(assumption, confidence=medium)",

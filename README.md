@@ -54,6 +54,7 @@ go run ./cmd/debate --personas ./exmaples/personas.pm.json --addr :8090
 `POST /api/debate` 요청 규칙:
 
 - JSON body 필드: `problem`(필수), `persona_path`(선택), `personas`(선택)
+- 런타임 튜닝 필드(선택): `audience_mode`, `max_turns`, `consensus_threshold`, `max_no_progress_judges`, `no_progress_epsilon`, `unlimited_hard_max_turns`, `direct_handoff_judge_every`, `llm_history_turn_window`, `max_duration_seconds`, `max_total_tokens`, `run_timeout_seconds`
 - unknown field는 거부됩니다.
 - 여러 JSON 값을 이어 붙인 body는 거부됩니다.
 

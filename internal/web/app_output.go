@@ -13,8 +13,20 @@ import (
 	"debate/internal/persona"
 )
 
-func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []persona.Persona, onTurn func(orchestrator.Turn)) (debateResponse, error) {
-	result, err := a.runner.Run(ctx, problem, personas, onTurn)
+func (a *App) runAndSaveDebate(ctx context.Context, problem string, personas []persona.Persona, runCfg *orchestrator.Config, onTurn func(orchestrator.Turn)) (debateResponse, error) {
+	var (
+		result orchestrator.Result
+		err    error
+	)
+	if runCfg != nil {
+		configurableRunner, ok := a.runner.(ConfigurableRunner)
+		if !ok {
+			return debateResponse{}, fmt.Errorf("runtime tuning is not supported by the current runner")
+		}
+		result, err = configurableRunner.RunWithConfig(ctx, problem, personas, *runCfg, onTurn)
+	} else {
+		result, err = a.runner.Run(ctx, problem, personas, onTurn)
+	}
 	if err != nil {
 		return debateResponse{}, fmt.Errorf("run debate: %w", err)
 	}

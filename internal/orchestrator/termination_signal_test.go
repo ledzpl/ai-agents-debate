@@ -1,6 +1,9 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseTurnTerminationSignal(t *testing.T) {
 	signal := parseTurnTerminationSignal("핵심만 정리합니다.\nNEXT: b\nCLOSE: yes\nNEW_POINT: no")
@@ -9,6 +12,28 @@ func TestParseTurnTerminationSignal(t *testing.T) {
 	}
 	if signal.newPoint == nil || *signal.newPoint {
 		t.Fatalf("expected newPoint=false, got %#v", signal.newPoint)
+	}
+	if signal.persuasionAdopted {
+		t.Fatalf("did not expect persuasion adoption signal in basic close/new_point content")
+	}
+	if signal.boundedExperiment {
+		t.Fatalf("did not expect bounded experiment signal in basic close/new_point content")
+	}
+}
+
+func TestParseTurnTerminationSignalRecognizesPersuasionAndExperimentSignals(t *testing.T) {
+	content := strings.Join([]string{
+		"1. PERSUASION_UPDATE: changed=yes; adopted=리스크 가드레일; rationale=장애 비용 근거; remaining_gap=none",
+		"- DECISION_CHECK: choose Option A or B; owner=pm; decide_by=2026-03-15; success_metric=p95<300ms; stop_condition=error_rate>1%",
+		"CLOSE: yes",
+		"NEW_POINT: no",
+	}, "\n")
+	signal := parseTurnTerminationSignal(content)
+	if !signal.persuasionAdopted {
+		t.Fatalf("expected persuasion adoption signal from PERSUASION_UPDATE line")
+	}
+	if !signal.boundedExperiment {
+		t.Fatalf("expected bounded experiment signal from decision-check line")
 	}
 }
 
@@ -35,14 +60,29 @@ func TestTerminationSignalTrackerShouldSuggestStop(t *testing.T) {
 	tracker := newTerminationSignalTracker()
 	turns := []Turn{
 		{Type: TurnTypePersona, SpeakerID: "a", SpeakerName: "A", Content: "NEXT: b\nCLOSE: yes\nNEW_POINT: no"},
-		{Type: TurnTypePersona, SpeakerID: "b", SpeakerName: "B", Content: "NEXT: c\nCLOSE: yes\nNEW_POINT: no"},
+		{Type: TurnTypePersona, SpeakerID: "b", SpeakerName: "B", Content: "NEXT: c\nPERSUASION_UPDATE: changed=yes; adopted=A의 가드레일; rationale=리스크 근거; remaining_gap=none\nCLOSE: yes\nNEW_POINT: no"},
 		{Type: TurnTypePersona, SpeakerID: "c", SpeakerName: "C", Content: "NEXT: a\nCLOSE: yes\nNEW_POINT: no"},
 	}
 	for _, turn := range turns {
 		tracker.observe(turn)
 	}
 	if !tracker.shouldSuggestStop(3) {
-		t.Fatal("expected close quorum + no-new-point streak to suggest stop")
+		t.Fatal("expected close quorum + no-new-point streak + persuasion/experiment signal to suggest stop")
+	}
+}
+
+func TestTerminationSignalTrackerDoesNotSuggestStopWithoutPersuasionOrExperimentSignal(t *testing.T) {
+	tracker := newTerminationSignalTracker()
+	turns := []Turn{
+		{Type: TurnTypePersona, SpeakerID: "a", SpeakerName: "A", Content: "NEXT: b\nCLOSE: yes\nNEW_POINT: no"},
+		{Type: TurnTypePersona, SpeakerID: "b", SpeakerName: "B", Content: "NEXT: c\nCLOSE: yes\nNEW_POINT: no"},
+		{Type: TurnTypePersona, SpeakerID: "c", SpeakerName: "C", Content: "NEXT: a\nCLOSE: yes\nNEW_POINT: no"},
+	}
+	for _, turn := range turns {
+		tracker.observe(turn)
+	}
+	if tracker.shouldSuggestStop(3) {
+		t.Fatal("did not expect stop suggestion without persuasion/experiment signal")
 	}
 }
 

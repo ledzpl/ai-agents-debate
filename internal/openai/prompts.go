@@ -98,8 +98,14 @@ You are a specialized persona in a high-stakes multi-persona debate. Your goal i
 - Cite prior turns using [Index] only when claim reference is clear and verifiable, and avoid non-index bracket labels such as [evidence] or [assumption].
 - Avoid repeating the last two turns verbatim.
 
+### OBJECTIVE RULES
+- Optimize for the best user outcome under explicit constraints (risk, feasibility, cost, and delivery speed).
+- Keep one stable optimization frame unless new evidence justifies changing it.
+- If your optimization frame changes, state what changed and why.
+
 ### EVIDENCE / QUALITY GATES
 - When recommendation or confidence changes materially, include evidence_type=data|experience|assumption and confidence=low|medium|high.
+- If a peer argument changed your position, explicitly acknowledge the adopted point and why it is valid.
 - ISSUE_UPDATE quality rule: no TBD/unknown/later/soon for decide_by or blocker.
 - Do not emit ISSUE_UPDATE or SELF_CHECK when nothing changed.
 
@@ -107,10 +113,12 @@ You are a specialized persona in a high-stakes multi-persona debate. Your goal i
 - Deadlock breaker: if progress stalls, force a comparison table.
 - OPTION_A: keep current direction with explicit owner + decide_by + metric_threshold.
 - OPTION_B: switch direction with explicit owner + decide_by + metric_threshold.
+- If uncertainty blocks convergence, propose the smallest discriminating experiment with owner + decide_by + success_metric + stop_condition.
 - CLOSE should be yes only when unresolved blockers <=1, unowned issues = 0, decide_by signals >=1.
 
 ### MACHINE-READABLE CONTROLS
 - ISSUE_UPDATE: <issue> | owner=<id> | decide_by=<trigger> | blocker=<item>
+- PERSUASION_UPDATE: changed=yes|no; adopted=<peer point or none>; rationale=<why>; remaining_gap=<open disagreement or none>
 - SELF_CHECK: <likely bias/failure mode> -> <mitigation in this turn>
 - META_DELTA: changed=<what>; unchanged=<what>; next_question=<question>
 
@@ -193,6 +201,8 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	closeReadiness := summarizeCloseReadiness(input.Turns)
 	requireQualityCheckpoint := (turnNo%4 == 0) || noNewPointStreak >= 2
 	requireIssueCheckpoint := (turnNo%4 == 0) || noNewPointStreak >= 2
+	requirePersuasionCheckpoint := (turnNo%3 == 0) || noNewPointStreak >= 1
+	requireExperimentCheckpoint := noNewPointStreak >= 2
 	periodicMetaTurn := turnNo%4 == 0
 
 	var b strings.Builder
@@ -209,6 +219,16 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	}
 	b.WriteString("- cite [Index] when claim reference is clear and verifiable.\n")
 	b.WriteString("</context>\n\n")
+
+	b.WriteString("Optimization frame:\n")
+	b.WriteString("- optimize for best user outcome under explicit constraints: risk, feasibility, cost, and delivery speed.\n")
+	b.WriteString("- keep one stable objective frame unless evidence forces change.\n")
+	if turnNo == 1 {
+		b.WriteString("- first-turn requirement: explicitly declare your objective frame in one sentence.\n")
+	} else {
+		b.WriteString("- if objective frame changes, explain what changed and why.\n")
+	}
+	b.WriteString("\n")
 
 	b.WriteString("Participants:\n")
 	if len(input.Personas) == 0 {
@@ -276,6 +296,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	b.WriteString(fmt.Sprintf("- close readiness snapshot: unresolved_blockers=%d, unowned_issues=%d, decide_by_signals=%d\n", closeReadiness.unresolvedBlockers, closeReadiness.unownedIssues, closeReadiness.decideBySignals))
 	b.WriteString("- CLOSE decision must use the snapshot above as source of truth.\n")
 	b.WriteString("- CLOSE gate: unresolved_blockers<=1, unowned_issues=0, decide_by_signals>=1.\n")
+	b.WriteString("- persuasion gate: before CLOSE=yes, show at least one adopted peer point or an explicit uncertainty-reduction experiment.\n")
 	if noNewPointStreak >= 2 {
 		b.WriteString("- deadlock signal: repeated no-new-point streak detected.\n")
 		b.WriteString("- deadlock mode required now: apply the system deadlock breaker (OPTION_A/OPTION_B table).\n")
@@ -299,6 +320,14 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	} else {
 		b.WriteString("- include ISSUE_UPDATE only when opening a new issue or when owner/decide_by/blocker changes.\n")
 	}
+	if requirePersuasionCheckpoint {
+		b.WriteString("- persuasion checkpoint required now: include PERSUASION_UPDATE and state what you adopted from a peer plus remaining gap.\n")
+	} else {
+		b.WriteString("- include PERSUASION_UPDATE when your stance changed or when you adopted a peer point.\n")
+	}
+	if requireExperimentCheckpoint {
+		b.WriteString("- deadlock experiment required now: propose the smallest discriminating experiment with owner + decide_by + success_metric + stop_condition.\n")
+	}
 	b.WriteString("- keep decide_by/blocker concrete (" + issuePlaceholderGuardrail + ").\n")
 	if periodicMetaTurn {
 		b.WriteString("- periodic meta-summary turn: emit META_DELTA with changed/unchanged/next_question.\n")
@@ -306,6 +335,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 		b.WriteString("- periodic meta-summary turn: emit META_DELTA with changed/unchanged/next_question every 4th turn.\n")
 	}
 	b.WriteString("- control-line block must end with:\n")
+	b.WriteString("PERSUASION_UPDATE: changed=yes|no; adopted=<peer point or none>; rationale=<why>; remaining_gap=<open disagreement or none>\n")
 	b.WriteString("HANDOFF_ASK: <one concrete question for the NEXT speaker>\n")
 	b.WriteString("NEXT: <persona_id>\n")
 	b.WriteString("CLOSE: yes|no\n")
@@ -329,6 +359,8 @@ You are a strict consensus judge. Your goal is to determine if the debate has pr
    - 0.90-1.00: workable consensus
    - 0.70-0.89: partial alignment with material risk
    - 0.00-0.69: unresolved disagreement
+5. Persuasion quality: reached=true requires at least one explicit cross-persona adoption/concession with [Index] support.
+6. Optimality check: chosen direction must dominate alternatives on objective/constraints OR include a concrete uncertainty-reduction experiment.
 
 ### OUTPUT FORMAT (STRICT JSON)
 - Return a single-line minified JSON object.
@@ -338,6 +370,8 @@ You are a strict consensus judge. Your goal is to determine if the debate has pr
 - Never omit required keys.
 - next_action_owner: "moderator" if ownership is unclear.
 - Avoid placeholder values in next_action fields (%s).
+- rationale must state who was persuaded (or not), what changed, and why.
+- reached=true only when key objections are resolved by evidence or by a concrete, bounded experiment plan.
 - JSON type constraints: reached must be unquoted true/false; score must be numeric 0..1; open_risks must be an array.
 - final character must be }.
 - JSON template: {"reached":false,"score":0.0,"summary":"","rationale":"","open_risks":[],"next_action_owner":"moderator","next_action_trigger_or_deadline":"48h","next_action_success_metric":"clear measurable criterion"}
@@ -372,6 +406,9 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	b.WriteString("- key order: reached, score, summary, rationale, open_risks, next_action_owner, next_action_trigger_or_deadline, next_action_success_metric.\n")
 	b.WriteString("- never omit keys; if uncertain, use conservative concrete defaults.\n")
 	b.WriteString("- avoid placeholder values in next_action fields.\n")
+	b.WriteString("- reached=true requires at least one explicit persuasion/concession event plus resolved key objections.\n")
+	b.WriteString("- if uncertainty remains, reached=true is allowed only with a concrete bounded experiment plan (owner/deadline/metric).\n")
+	b.WriteString("- rationale must mention who changed what (or why no one changed).\n")
 	b.WriteString("- type constraints: reached is boolean, score is numeric 0..1.\n")
 	b.WriteString("- final character must be }.\n")
 	return b.String()
@@ -391,6 +428,7 @@ You are the moderator. Your goal is to sharpen the debate by exposing hidden ten
 - Close the loop on your previous intervention.
 - Use synthesis -> unresolved tradeoff -> targeted next-speaker question.
 - Ask must be decision-forcing and point to a specific prior claim (speaker + idea).
+- Force persuasion accounting: ask what point was adopted from another speaker and what still blocks convergence.
 - Do not introduce external facts.
 - Adapt wording depth to audience_mode.
 
@@ -405,6 +443,7 @@ DECISION_CHECK: choose Option A or B; metric_threshold=<value>; decide_by=<trigg
 Optional disambiguation lines:
 OPTION_A: <short definition>
 OPTION_B: <short definition>
+PERSUASION_CHECK: adopted_from=<speaker/index or none>; remaining_gap=<gap>
 SCORECARD: coherence=<0-100>; executability=<0-100>; risk_coverage=<0-100>
 SCORECARD_REASON: <one sentence>
 The 4 required lines remain mandatory.
@@ -413,6 +452,7 @@ The 4 required lines remain mandatory.
 - DECISION_CHECK: choose Option A or B.
 - metric_threshold must be numeric or explicit condition.
 - no TBD/unknown/later/soon for metric_threshold/decide_by.
+- If uncertainty is the blocker, DECISION_CHECK must include a smallest discriminating experiment with owner, deadline, success metric, and stop condition.
 - Do not translate or rename required labels.
 - Do not add prose before SYNTHESIS or after final metadata line.
 - Self-repair before final output.`)
@@ -421,6 +461,7 @@ The 4 required lines remain mandatory.
 func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string {
 	budget := derivePromptBudget(len(input.Personas), len(input.Turns))
 	personaTurnCount := countPersonaTurns(input.Turns)
+	noNewPointStreak := trailingNoNewPointStreak(input.Turns)
 	audienceMode := normalizePromptAudienceMode(input.AudienceMode)
 
 	var b strings.Builder
@@ -460,12 +501,18 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 	}
 	b.WriteString("\nModerator balancing guidance:\n")
 	b.WriteString("- Avoid recency: treat latest turn as one data point, not the whole debate.\n")
+	b.WriteString("- Ask for persuasion accounting: what the next speaker adopted from peers and what remains unresolved.\n")
 	b.WriteString("- DECISION_CHECK using this exact structure: DECISION_CHECK: choose Option A or B; metric_threshold=<concrete>; decide_by=<trigger>.\n")
 	b.WriteString("- metric_threshold and decide_by must both be concrete values.\n")
+	b.WriteString("- When uncertainty is the blocker, require a smallest discriminating experiment with owner + decide_by + success_metric + stop_condition.\n")
 	b.WriteString("\nModerator cadence signals:\n")
 	b.WriteString(fmt.Sprintf("- persona turns observed so far: %d\n", personaTurnCount))
+	b.WriteString(fmt.Sprintf("- trailing persona NEW_POINT=no streak: %d\n", noNewPointStreak))
 	if personaTurnCount > 0 && personaTurnCount%4 == 0 {
 		b.WriteString("- include SCORECARD + SCORECARD_REASON in this intervention.\n")
+	}
+	if noNewPointStreak >= 2 {
+		b.WriteString("- stagnation detected: force OPTION_A/OPTION_B plus experiment-focused DECISION_CHECK.\n")
 	}
 	b.WriteString("- requested audience_mode: " + audienceMode + "\n")
 	return b.String()
@@ -686,6 +733,9 @@ type issueState struct {
 type decisionStateSnapshot struct {
 	issues                map[string]issueState
 	issueOrder            map[string]int
+	persuasionAdoptions   int
+	persuasionGapSignals  int
+	hasBoundedExperiment  bool
 	hasStandaloneDecideBy bool
 }
 
@@ -774,6 +824,13 @@ func buildJudgeDecisionStateSnapshot(turns []orchestrator.Turn) string {
 	} else {
 		b.WriteString("- decide_by signal outside issue registry: none\n")
 	}
+	b.WriteString(fmt.Sprintf("- persuasion adoption signals: %d\n", snapshot.persuasionAdoptions))
+	b.WriteString(fmt.Sprintf("- persuasion remaining gaps signaled: %d\n", snapshot.persuasionGapSignals))
+	if snapshot.hasBoundedExperiment {
+		b.WriteString("- bounded experiment signal: present\n")
+	} else {
+		b.WriteString("- bounded experiment signal: none\n")
+	}
 	return b.String()
 }
 
@@ -782,6 +839,9 @@ func extractDecisionStateSnapshot(turns []orchestrator.Turn) decisionStateSnapsh
 	issueOrder := make(map[string]int)
 	anonymousIssueID := 0
 	hasStandaloneDecideBy := false
+	persuasionAdoptions := 0
+	persuasionGapSignals := 0
+	hasBoundedExperiment := false
 	updateSeq := 0
 
 	for _, t := range turns {
@@ -804,13 +864,25 @@ func extractDecisionStateSnapshot(turns []orchestrator.Turn) decisionStateSnapsh
 				updateSeq++
 				continue
 			}
+			if strings.HasPrefix(upper, "PERSUASION_UPDATE:") {
+				payload := strings.TrimSpace(normalized[len("PERSUASION_UPDATE:"):])
+				if hasPersuasionAdoptionSignal(payload) {
+					persuasionAdoptions++
+				}
+				if gap := extractDirectiveValue(payload, "remaining_gap="); !isPlaceholderValue(gap) {
+					persuasionGapSignals++
+				}
+				continue
+			}
 
 			if val := extractDirectiveValue(normalized, "decide_by="); !isPlaceholderValue(val) {
 				hasStandaloneDecideBy = true
-				continue
 			}
 			if val := extractDirectiveValue(normalized, "deadline="); !isPlaceholderValue(val) {
 				hasStandaloneDecideBy = true
+			}
+			if !hasBoundedExperiment && hasBoundedExperimentSignal(normalized) {
+				hasBoundedExperiment = true
 			}
 		}
 	}
@@ -818,7 +890,41 @@ func extractDecisionStateSnapshot(turns []orchestrator.Turn) decisionStateSnapsh
 	return decisionStateSnapshot{
 		issues:                states,
 		issueOrder:            issueOrder,
+		persuasionAdoptions:   persuasionAdoptions,
+		persuasionGapSignals:  persuasionGapSignals,
+		hasBoundedExperiment:  hasBoundedExperiment,
 		hasStandaloneDecideBy: hasStandaloneDecideBy,
+	}
+}
+
+func hasPersuasionAdoptionSignal(payload string) bool {
+	changed, ok := parsePromptBoolToken(extractDirectiveValue(payload, "changed="))
+	if !ok || !changed {
+		return false
+	}
+	adopted := extractDirectiveValue(payload, "adopted=")
+	return !isPlaceholderValue(adopted)
+}
+
+func hasBoundedExperimentSignal(line string) bool {
+	lower := strings.ToLower(line)
+	if !strings.Contains(lower, "success_metric=") || !strings.Contains(lower, "stop_condition=") {
+		return false
+	}
+	if !strings.Contains(lower, "owner=") {
+		return false
+	}
+	return strings.Contains(lower, "decide_by=") || strings.Contains(lower, "deadline=")
+}
+
+func parsePromptBoolToken(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "yes", "y", "true", "1":
+		return true, true
+	case "no", "n", "false", "0":
+		return false, true
+	default:
+		return false, false
 	}
 }
 

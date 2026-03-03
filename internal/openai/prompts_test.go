@@ -94,8 +94,17 @@ func TestBuildModeratorUserPromptIncludesNextSpeakerLens(t *testing.T) {
 	if !strings.Contains(prompt, "metric_threshold and decide_by must both be concrete values") {
 		t.Fatalf("expected concrete decision-check values guidance in moderator prompt, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Ask for persuasion accounting") {
+		t.Fatalf("expected persuasion-accounting guidance in moderator prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "smallest discriminating experiment with owner + decide_by + success_metric + stop_condition") {
+		t.Fatalf("expected uncertainty-reduction experiment guidance in moderator prompt, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "Moderator cadence signals:") {
 		t.Fatalf("expected moderator cadence signal section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "trailing persona NEW_POINT=no streak:") {
+		t.Fatalf("expected no-new-point streak signal in moderator prompt, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Recent debate log:") {
 		t.Fatalf("expected recent log section, prompt=%q", prompt)
@@ -155,6 +164,15 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "evidence_type=data|experience|assumption") || !strings.Contains(prompt, "confidence=low|medium|high") {
 		t.Fatalf("expected evidence-quality gate guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "best user outcome under explicit constraints") {
+		t.Fatalf("expected explicit optimization-frame guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Keep one stable optimization frame unless new evidence justifies changing it") {
+		t.Fatalf("expected optimization-frame stability guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "PERSUASION_UPDATE: changed=yes|no") {
+		t.Fatalf("expected persuasion state-update control line guidance, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "SELF_CHECK: <likely bias/failure mode> -> <mitigation in this turn>") {
 		t.Fatalf("expected persona self-check guidance, prompt=%q", prompt)
 	}
@@ -169,6 +187,9 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Deadlock breaker") || !strings.Contains(prompt, "OPTION_A:") || !strings.Contains(prompt, "OPTION_B:") {
 		t.Fatalf("expected deadlock decision-table guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "smallest discriminating experiment with owner + decide_by + success_metric + stop_condition") {
+		t.Fatalf("expected deadlock experiment guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "META_DELTA: changed=") {
 		t.Fatalf("expected periodic meta summary guidance, prompt=%q", prompt)
@@ -272,11 +293,17 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	if !strings.Contains(prompt, "synthesis -> unresolved tradeoff -> targeted next-speaker question") {
 		t.Fatalf("expected moderator structure guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Force persuasion accounting") {
+		t.Fatalf("expected persuasion-accounting principle in moderator system prompt, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "Required line format and order") {
 		t.Fatalf("expected fixed moderator line-order guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Optional disambiguation lines") {
 		t.Fatalf("expected optional option-line guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "PERSUASION_CHECK: adopted_from=") {
+		t.Fatalf("expected optional persuasion-check line guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "The 4 required lines remain mandatory") {
 		t.Fatalf("expected required-line preservation guidance, prompt=%q", prompt)
@@ -304,6 +331,9 @@ func TestBuildModeratorSystemPromptReducesRecencyBias(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "metric_threshold must be numeric or explicit condition") {
 		t.Fatalf("expected metric-threshold specificity guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "smallest discriminating experiment with owner, deadline, success metric, and stop condition") {
+		t.Fatalf("expected uncertainty-blocker experiment guidance, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "SCORECARD: coherence=<0-100>; executability=<0-100>; risk_coverage=<0-100>") {
 		t.Fatalf("expected periodic scorecard rubric guidance, prompt=%q", prompt)
@@ -566,6 +596,12 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "Debate phase:") || !strings.Contains(prompt, "current phase:") {
 		t.Fatalf("expected debate phase guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "Optimization frame:") {
+		t.Fatalf("expected optimization frame section, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "optimize for best user outcome under explicit constraints") {
+		t.Fatalf("expected optimization objective guidance in turn prompt, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "decision-forcing handoff question") {
 		t.Fatalf("expected decision-forcing handoff objective, prompt=%q", prompt)
 	}
@@ -590,6 +626,9 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	if !strings.Contains(prompt, "CLOSE decision must use the snapshot above as source of truth") {
 		t.Fatalf("expected snapshot-first close gating guidance, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "persuasion gate: before CLOSE=yes") {
+		t.Fatalf("expected persuasion gate guidance for close, prompt=%q", prompt)
+	}
 	if !strings.Contains(prompt, "quality checkpoint required now") || !strings.Contains(prompt, "evidence_type=data|experience|assumption") {
 		t.Fatalf("expected quality-checkpoint guidance in turn objective, prompt=%q", prompt)
 	}
@@ -604,6 +643,9 @@ func TestBuildTurnUserPromptIncludesInteractionSnapshotAndObjectives(t *testing.
 	}
 	if !strings.Contains(prompt, "META_DELTA with changed/unchanged/next_question") {
 		t.Fatalf("expected meta delta requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "PERSUASION_UPDATE: changed=yes|no") {
+		t.Fatalf("expected explicit persuasion update control line in turn objective, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "HANDOFF_ASK:") || !strings.Contains(prompt, "NEXT: <persona_id>") {
 		t.Fatalf("expected explicit control lines for handoff, prompt=%q", prompt)
@@ -683,6 +725,12 @@ func TestBuildTurnUserPromptDeadlockModeWhenNoNewPointStreak(t *testing.T) {
 	if !strings.Contains(prompt, "issue-state checkpoint required now") {
 		t.Fatalf("expected issue checkpoint guidance in deadlock mode, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "deadlock experiment required now: propose the smallest discriminating experiment") {
+		t.Fatalf("expected deadlock experiment requirement in deadlock mode, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "persuasion checkpoint required now") {
+		t.Fatalf("expected persuasion checkpoint requirement in deadlock mode, prompt=%q", prompt)
+	}
 }
 
 func TestBuildTurnUserPromptDoesNotForceQualityCheckpointEveryTurn(t *testing.T) {
@@ -746,6 +794,9 @@ func TestBuildModeratorUserPromptIncludesScorecardCadenceTrigger(t *testing.T) {
 	if !strings.Contains(prompt, "include SCORECARD + SCORECARD_REASON in this intervention") {
 		t.Fatalf("expected scorecard cadence trigger, prompt=%q", prompt)
 	}
+	if !strings.Contains(prompt, "trailing persona NEW_POINT=no streak:") {
+		t.Fatalf("expected no-new-point streak signal in moderator cadence, prompt=%q", prompt)
+	}
 }
 
 func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
@@ -758,6 +809,12 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "If evidence is mixed or insufficient, prefer reached=false") {
 		t.Fatalf("expected conservative fallback rule, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Persuasion quality: reached=true requires at least one explicit cross-persona adoption/concession") {
+		t.Fatalf("expected persuasion quality gate for reached=true, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "Optimality check: chosen direction must dominate alternatives on objective/constraints OR include a concrete uncertainty-reduction experiment") {
+		t.Fatalf("expected optimality check guidance in judge prompt, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "at least two different speakers/turns") {
 		t.Fatalf("expected rationale evidence requirement, prompt=%q", prompt)
@@ -782,6 +839,12 @@ func TestBuildJudgeSystemPromptHasConservativeRubric(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Avoid placeholder values in next_action fields") {
 		t.Fatalf("expected anti-placeholder next_action guidance, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "rationale must state who was persuaded (or not), what changed, and why") {
+		t.Fatalf("expected persuasion-change rationale requirement, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "reached=true only when key objections are resolved by evidence or by a concrete, bounded experiment plan") {
+		t.Fatalf("expected reached=true guardrail with bounded experiment plan, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "Self-repair before final output") {
 		t.Fatalf("expected malformed-json self-repair guidance, prompt=%q", prompt)
@@ -821,6 +884,12 @@ func TestBuildJudgeUserPromptIncludesFormatReminder(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "avoid placeholder values in next_action fields") {
 		t.Fatalf("expected anti-placeholder reminder, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "reached=true requires at least one explicit persuasion/concession event plus resolved key objections") {
+		t.Fatalf("expected persuasion/concession reminder in judge user prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "rationale must mention who changed what") {
+		t.Fatalf("expected rationale-change reminder in judge user prompt, prompt=%q", prompt)
 	}
 	if !strings.Contains(prompt, "type constraints: reached is boolean, score is numeric 0..1") {
 		t.Fatalf("expected type constraint reminder, prompt=%q", prompt)
@@ -1167,6 +1236,7 @@ func TestIsPlaceholderValueHandlesWrappedVariants(t *testing.T) {
 func TestSummarizeTurnContentStripsMarkdownPrefixedDirectiveLines(t *testing.T) {
 	content := strings.Join([]string{
 		"> ISSUE_UPDATE: launch-window | owner=pm | decide_by=2026-03-10 | blocker=none",
+		"- PERSUASION_UPDATE: changed=yes; adopted=risk guardrail; rationale=incident data; remaining_gap=rollout scope",
 		"- DECISION_CHECK: choose Option A or B; metric_threshold>=2%; decide_by=2026-03-12",
 		"1. SCORECARD: coherence=80; executability=70; risk_coverage=75",
 		"실제 사용자 영향: 초기 전환율은 소폭 개선되지만 리스크 모니터링이 필요합니다.",
@@ -1174,6 +1244,7 @@ func TestSummarizeTurnContentStripsMarkdownPrefixedDirectiveLines(t *testing.T) 
 
 	summary := summarizeTurnContent(content, 200)
 	if strings.Contains(strings.ToUpper(summary), "ISSUE_UPDATE") ||
+		strings.Contains(strings.ToUpper(summary), "PERSUASION_UPDATE") ||
 		strings.Contains(strings.ToUpper(summary), "DECISION_CHECK") ||
 		strings.Contains(strings.ToUpper(summary), "SCORECARD") {
 		t.Fatalf("expected directive-prefixed lines to be stripped from summary, got %q", summary)
@@ -1247,6 +1318,43 @@ func TestBuildJudgeDecisionStateSnapshotPrioritizesUnresolvedAndRecentIssues(t *
 	snapshot := buildJudgeDecisionStateSnapshot(turns)
 	if !strings.Contains(snapshot, "z-urgent-risk: owner=unassigned; decide_by=tbd; blocker=security review pending") {
 		t.Fatalf("expected unresolved/recent issue to be prioritized into capped snapshot, snapshot=%q", snapshot)
+	}
+}
+
+func TestBuildJudgeDecisionStateSnapshotIncludesPersuasionAndExperimentSignals(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "ISSUE_UPDATE: rollout | owner=pm | decide_by=2026-03-20 | blocker=none",
+		},
+		{
+			Index:       2,
+			SpeakerID:   "p2",
+			SpeakerName: "Risk",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "PERSUASION_UPDATE: changed=yes; adopted=가드레일 우선 적용; rationale=장애 비용 근거; remaining_gap=실험 범위 확정",
+		},
+		{
+			Index:       3,
+			SpeakerID:   "p3",
+			SpeakerName: "Data",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "DECISION_CHECK: choose Option A or B; owner=data; decide_by=2026-03-18; success_metric=p95<300ms; stop_condition=error_rate>1%",
+		},
+	}
+
+	snapshot := buildJudgeDecisionStateSnapshot(turns)
+	if !strings.Contains(snapshot, "persuasion adoption signals: 1") {
+		t.Fatalf("expected persuasion adoption signal count in snapshot, snapshot=%q", snapshot)
+	}
+	if !strings.Contains(snapshot, "persuasion remaining gaps signaled: 1") {
+		t.Fatalf("expected persuasion remaining-gap signal count in snapshot, snapshot=%q", snapshot)
+	}
+	if !strings.Contains(snapshot, "bounded experiment signal: present") {
+		t.Fatalf("expected bounded experiment signal in snapshot, snapshot=%q", snapshot)
 	}
 }
 
@@ -1368,7 +1476,14 @@ func TestBuildJudgeUserPromptIncludesDecisionStateSnapshot(t *testing.T) {
 				SpeakerID:   "p2",
 				SpeakerName: "Risk",
 				Type:        orchestrator.TurnTypePersona,
-				Content:     "DECISION_CHECK: choose Option A or B; metric_threshold=p95<300ms; decide_by=2026-03-19",
+				Content:     "PERSUASION_UPDATE: changed=yes; adopted=릴리즈 창 축소; rationale=장애 리스크 근거; remaining_gap=none",
+			},
+			{
+				Index:       3,
+				SpeakerID:   "p2",
+				SpeakerName: "Risk",
+				Type:        orchestrator.TurnTypePersona,
+				Content:     "DECISION_CHECK: choose Option A or B; metric_threshold=p95<300ms; owner=risk; decide_by=2026-03-19; success_metric=에러율 1% 미만; stop_condition=에러율 1% 초과",
 			},
 		},
 	})
@@ -1381,5 +1496,11 @@ func TestBuildJudgeUserPromptIncludesDecisionStateSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "decide_by signal outside issue registry: present") {
 		t.Fatalf("expected standalone decide_by signal summary in judge prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "persuasion adoption signals: 1") {
+		t.Fatalf("expected persuasion adoption signal summary in judge prompt, prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "bounded experiment signal: present") {
+		t.Fatalf("expected bounded experiment signal summary in judge prompt, prompt=%q", prompt)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"debate/internal/config"
 )
@@ -60,5 +61,48 @@ func TestParseRuntimeOptionsRejectsUnknownFlag(t *testing.T) {
 	_, err := parseRuntimeOptions([]string{"--web"})
 	if err == nil {
 		t.Fatal("expected unknown flag error")
+	}
+}
+
+func TestOrchestratorConfigFromSettings(t *testing.T) {
+	settings := config.Settings{
+		MaxTurns:           11,
+		ConsensusThreshold: 0.88,
+		MaxDuration:        17 * time.Minute,
+		MaxTotalTokens:     45000,
+		MaxNoProgressJudge: 4,
+		HardMaxTurns:       320,
+		DirectJudgeEvery:   3,
+		LLMHistoryWindow:   90,
+		AudienceMode:       "expert",
+	}
+
+	got := orchestratorConfigFromSettings(settings)
+	if got.MaxTurns != settings.MaxTurns {
+		t.Fatalf("unexpected max turns: %d", got.MaxTurns)
+	}
+	if got.ConsensusThreshold != settings.ConsensusThreshold {
+		t.Fatalf("unexpected threshold: %v", got.ConsensusThreshold)
+	}
+	if got.MaxDuration != settings.MaxDuration {
+		t.Fatalf("unexpected duration: %s", got.MaxDuration)
+	}
+	if got.MaxTotalTokens != settings.MaxTotalTokens {
+		t.Fatalf("unexpected max total tokens: %d", got.MaxTotalTokens)
+	}
+	if got.MaxNoProgressJudges != settings.MaxNoProgressJudge {
+		t.Fatalf("unexpected max no progress judges: %d", got.MaxNoProgressJudges)
+	}
+	if got.UnlimitedHardMaxTurns != settings.HardMaxTurns {
+		t.Fatalf("unexpected hard max turns: %d", got.UnlimitedHardMaxTurns)
+	}
+	if got.DirectHandoffJudgeEvery != settings.DirectJudgeEvery {
+		t.Fatalf("unexpected direct judge cadence: %d", got.DirectHandoffJudgeEvery)
+	}
+	if got.LLMHistoryTurnWindow != settings.LLMHistoryWindow {
+		t.Fatalf("unexpected history window: %d", got.LLMHistoryTurnWindow)
+	}
+	if got.AudienceMode != settings.AudienceMode {
+		t.Fatalf("unexpected audience mode: %s", got.AudienceMode)
 	}
 }

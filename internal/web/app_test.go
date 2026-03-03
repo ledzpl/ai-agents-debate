@@ -42,6 +42,48 @@ func (s *stubRunner) Run(_ context.Context, problem string, personas []persona.P
 	return s.result, nil
 }
 
+type configurableRunner struct {
+	callCount         int
+	runWithConfigCall int
+	problem           string
+	personas          []persona.Persona
+	result            orchestrator.Result
+	streamTurns       []orchestrator.Turn
+	err               error
+	lastConfig        orchestrator.Config
+}
+
+func (r *configurableRunner) Run(_ context.Context, problem string, personas []persona.Persona, onTurn func(orchestrator.Turn)) (orchestrator.Result, error) {
+	r.callCount++
+	r.problem = problem
+	r.personas = append([]persona.Persona(nil), personas...)
+	if onTurn != nil {
+		for _, turn := range r.streamTurns {
+			onTurn(turn)
+		}
+	}
+	if r.err != nil {
+		return orchestrator.Result{}, r.err
+	}
+	return r.result, nil
+}
+
+func (r *configurableRunner) RunWithConfig(_ context.Context, problem string, personas []persona.Persona, cfg orchestrator.Config, onTurn func(orchestrator.Turn)) (orchestrator.Result, error) {
+	r.runWithConfigCall++
+	r.lastConfig = cfg
+	r.problem = problem
+	r.personas = append([]persona.Persona(nil), personas...)
+	if onTurn != nil {
+		for _, turn := range r.streamTurns {
+			onTurn(turn)
+		}
+	}
+	if r.err != nil {
+		return orchestrator.Result{}, r.err
+	}
+	return r.result, nil
+}
+
 type stoppableRunner struct {
 	startOnce sync.Once
 	doneOnce  sync.Once
@@ -511,6 +553,199 @@ func TestDebateStreamStartEndpointValidatesProblem(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDebateStreamStartAppliesRuntimeTuning(t *testing.T) {
+	runner := &configurableRunner{
+		result: orchestrator.Result{
+			Problem: "runtime tuning",
+			Status:  orchestrator.StatusMaxTurnsReached,
+			Consensus: orchestrator.Consensus{
+				Summary: "done",
+			},
+		},
+	}
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      runner,
+		RunnerDefaults: orchestrator.Config{
+			MaxTurns:                8,
+			ConsensusThreshold:      0.82,
+			MaxDuration:             20 * time.Minute,
+			MaxTotalTokens:          77777,
+			MaxNoProgressJudges:     6,
+			NoProgressEpsilon:       0.01,
+			UnlimitedHardMaxTurns:   400,
+			DirectHandoffJudgeEvery: 2,
+			LLMHistoryTurnWindow:    120,
+			AudienceMode:            orchestrator.AudienceModeGeneral,
+		},
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	startReq := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{
+		"problem":"runtime tuning",
+		"audience_mode":"expert",
+		"max_turns":14,
+		"max_no_progress_judges":4,
+		"no_progress_epsilon":0.005,
+		"unlimited_hard_max_turns":300,
+		"direct_handoff_judge_every":1,
+		"llm_history_turn_window":64,
+		"max_duration_seconds":900
+	}`))
+	startRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected start status: %d body=%s", startRec.Code, startRec.Body.String())
+	}
+	var started streamStartResponse
+	if err := json.Unmarshal(startRec.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	streamReq := httptest.NewRequest(http.MethodGet, "/api/debate/stream?run_id="+started.RunID, nil)
+	streamRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(streamRec, streamReq)
+	if streamRec.Code != http.StatusOK {
+		t.Fatalf("unexpected stream status: %d body=%s", streamRec.Code, streamRec.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runner.runWithConfigCall == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runner.runWithConfigCall != 1 {
+		t.Fatalf("expected RunWithConfig call, got %d", runner.runWithConfigCall)
+	}
+	if runner.lastConfig.AudienceMode != orchestrator.AudienceModeExpert {
+		t.Fatalf("unexpected audience mode: %s", runner.lastConfig.AudienceMode)
+	}
+	if runner.lastConfig.MaxTurns != 14 {
+		t.Fatalf("unexpected max turns: %d", runner.lastConfig.MaxTurns)
+	}
+	if runner.lastConfig.MaxNoProgressJudges != 4 {
+		t.Fatalf("unexpected max no progress judges: %d", runner.lastConfig.MaxNoProgressJudges)
+	}
+	if runner.lastConfig.NoProgressEpsilon != 0.005 {
+		t.Fatalf("unexpected no progress epsilon: %v", runner.lastConfig.NoProgressEpsilon)
+	}
+	if runner.lastConfig.UnlimitedHardMaxTurns != 300 {
+		t.Fatalf("unexpected hard max turns: %d", runner.lastConfig.UnlimitedHardMaxTurns)
+	}
+	if runner.lastConfig.DirectHandoffJudgeEvery != 1 {
+		t.Fatalf("unexpected direct handoff judge every: %d", runner.lastConfig.DirectHandoffJudgeEvery)
+	}
+	if runner.lastConfig.LLMHistoryTurnWindow != 64 {
+		t.Fatalf("unexpected llm history window: %d", runner.lastConfig.LLMHistoryTurnWindow)
+	}
+	if runner.lastConfig.MaxDuration != 15*time.Minute {
+		t.Fatalf("unexpected max duration: %s", runner.lastConfig.MaxDuration)
+	}
+	// Non-overridden value should keep baseline default.
+	if runner.lastConfig.MaxTotalTokens != 77777 {
+		t.Fatalf("unexpected max total tokens: %d", runner.lastConfig.MaxTotalTokens)
+	}
+}
+
+func TestDebateStreamStartRejectsRuntimeTuningForNonConfigurableRunner(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{
+		"problem":"unsupported tuning",
+		"audience_mode":"expert"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "runtime tuning is not supported") {
+		t.Fatalf("unexpected error body: %s", rec.Body.String())
+	}
+}
+
+func TestDebateStreamStartAllowsRunTimeoutWithoutConfigurableRunner(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{
+		"problem":"timeout only override",
+		"run_timeout_seconds":2
+	}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var started streamStartResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	streamReq := httptest.NewRequest(http.MethodGet, "/api/debate/stream?run_id="+started.RunID, nil)
+	streamRec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(streamRec, streamReq)
+	if streamRec.Code != http.StatusOK {
+		t.Fatalf("unexpected stream status: %d body=%s", streamRec.Code, streamRec.Body.String())
+	}
+}
+
+func TestDebateStreamStartRejectsInvalidRuntimeTuning(t *testing.T) {
+	app := NewApp(Config{
+		PersonaPath: "./personas.json",
+		OutputDir:   t.TempDir(),
+		Runner:      &stubRunner{},
+		Loader: func(string) ([]persona.Persona, error) {
+			return []persona.Persona{
+				{ID: "p1", Name: "Planner", Role: "plan"},
+				{ID: "p2", Name: "Builder", Role: "build"},
+			}, nil
+		},
+		Now: time.Now,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/debate/stream/start", bytes.NewBufferString(`{
+		"problem":"invalid tuning",
+		"consensus_threshold":1.4
+	}`))
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "consensus_threshold") {
+		t.Fatalf("unexpected error body: %s", rec.Body.String())
 	}
 }
 

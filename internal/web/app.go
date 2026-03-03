@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"debate/internal/orchestrator"
@@ -29,6 +28,10 @@ type Runner interface {
 	Run(ctx context.Context, problem string, personas []persona.Persona, onTurn func(orchestrator.Turn)) (orchestrator.Result, error)
 }
 
+type ConfigurableRunner interface {
+	RunWithConfig(ctx context.Context, problem string, personas []persona.Persona, cfg orchestrator.Config, onTurn func(orchestrator.Turn)) (orchestrator.Result, error)
+}
+
 type LoaderFunc func(path string) ([]persona.Persona, error)
 
 type Config struct {
@@ -36,10 +39,13 @@ type Config struct {
 	BaseDir     string
 	OutputDir   string
 	Runner      Runner
-	Loader      LoaderFunc
-	Now         func() time.Time
-	RunTimeout  time.Duration
-	TurnBuffer  int
+	// RunnerDefaults is the baseline config used when per-request runtime
+	// tuning overrides are provided.
+	RunnerDefaults orchestrator.Config
+	Loader         LoaderFunc
+	Now            func() time.Time
+	RunTimeout     time.Duration
+	TurnBuffer     int
 }
 
 type App struct {
@@ -47,6 +53,7 @@ type App struct {
 	baseDir     string
 	outputDir   string
 	runner      Runner
+	runnerCfg   orchestrator.Config
 	loader      LoaderFunc
 	now         func() time.Time
 	runTimeout  time.Duration
@@ -58,9 +65,20 @@ type App struct {
 }
 
 type debateRequest struct {
-	Problem     string            `json:"problem"`
-	PersonaPath string            `json:"persona_path,omitempty"`
-	Personas    []persona.Persona `json:"personas,omitempty"`
+	Problem                 string            `json:"problem"`
+	PersonaPath             string            `json:"persona_path,omitempty"`
+	Personas                []persona.Persona `json:"personas,omitempty"`
+	AudienceMode            *string           `json:"audience_mode,omitempty"`
+	MaxTurns                *int              `json:"max_turns,omitempty"`
+	ConsensusThreshold      *float64          `json:"consensus_threshold,omitempty"`
+	MaxNoProgressJudges     *int              `json:"max_no_progress_judges,omitempty"`
+	NoProgressEpsilon       *float64          `json:"no_progress_epsilon,omitempty"`
+	UnlimitedHardMaxTurns   *int              `json:"unlimited_hard_max_turns,omitempty"`
+	DirectHandoffJudgeEvery *int              `json:"direct_handoff_judge_every,omitempty"`
+	LLMHistoryTurnWindow    *int              `json:"llm_history_turn_window,omitempty"`
+	MaxDurationSeconds      *int              `json:"max_duration_seconds,omitempty"`
+	MaxTotalTokens          *int              `json:"max_total_tokens,omitempty"`
+	RunTimeoutSeconds       *int              `json:"run_timeout_seconds,omitempty"`
 }
 
 type debateResponse struct {
@@ -132,6 +150,7 @@ func NewApp(cfg Config) *App {
 		baseDir:     filepath.Clean(baseDir),
 		outputDir:   cfg.OutputDir,
 		runner:      cfg.Runner,
+		runnerCfg:   cfg.RunnerDefaults,
 		loader:      cfg.Loader,
 		now:         cfg.Now,
 		runTimeout:  cfg.RunTimeout,
@@ -236,7 +255,22 @@ func (a *App) handleDebate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := a.runAndSaveDebate(r.Context(), req.Problem, personas, nil)
+	runCfg, err := a.resolveRunnerConfig(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	runCtx, cancel, err := a.contextWithRuntimeTimeout(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if cancel != nil {
+		defer cancel()
+	}
+
+	resp, err := a.runAndSaveDebate(runCtx, req.Problem, personas, runCfg, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -245,174 +279,13 @@ func (a *App) handleDebate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (a *App) handleDebateStreamStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w, http.MethodPost)
-		return
+func (a *App) resolveRunnerConfig(req debateRequest) (*orchestrator.Config, error) {
+	if !req.hasRunnerTuning() {
+		return nil, nil
 	}
-
-	body := http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	defer body.Close()
-
-	req, err := decodeDebateRequest(body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	if _, ok := a.runner.(ConfigurableRunner); !ok {
+		return nil, errors.New("runtime tuning is not supported by the current runner")
 	}
-
-	personas, resolvedPath, err := a.resolvePersonas(req.PersonaPath, req.Personas)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("load personas: %v", err))
-		return
-	}
-
-	runID := a.nextRunID()
-	runCtx, cancel := context.WithTimeout(context.Background(), a.runTimeout)
-	run := newDebateRun(runID, streamStartEvent{
-		Problem:      req.Problem,
-		PersonaPath:  resolvedPath,
-		PersonaCount: len(personas),
-	}, cancel, a.turnBuffer)
-	a.storeRun(run)
-	time.AfterFunc(a.runTimeout+runRetention, func() {
-		run.stop()
-		a.deleteRun(runID)
-	})
-
-	go a.executeDebateRun(runCtx, runID, run, req.Problem, personas)
-
-	writeJSON(w, http.StatusAccepted, streamStartResponse{
-		RunID:        runID,
-		Problem:      req.Problem,
-		PersonaPath:  resolvedPath,
-		PersonaCount: len(personas),
-	})
-}
-
-func (a *App) handleDebateStream(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
-		return
-	}
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming is not supported by this server")
-		return
-	}
-
-	runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
-	if runID == "" {
-		writeError(w, http.StatusBadRequest, "run_id is required")
-		return
-	}
-
-	run, ok := a.loadRun(runID)
-	if !ok {
-		writeError(w, http.StatusNotFound, "run not found")
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	if err := writeSSE(w, flusher, "start", run.start); err != nil {
-		return
-	}
-
-	cursor := 0
-	for {
-		newTurns, adjustedCursor, done, stopped, resp, runErr := run.snapshot(cursor)
-		cursor = adjustedCursor
-		for _, turn := range newTurns {
-			if err := writeSSE(w, flusher, "turn", turn); err != nil {
-				return
-			}
-			cursor++
-		}
-
-		if done {
-			if stopped {
-				_ = writeSSE(w, flusher, "stopped", streamStoppedEvent{
-					RunID:  runID,
-					Status: "stopped",
-				})
-				return
-			}
-			if runErr != nil {
-				_ = writeSSE(w, flusher, "debate_error", map[string]string{
-					"error": runErr.Error(),
-				})
-				return
-			}
-			_ = writeSSE(w, flusher, "complete", resp)
-			return
-		}
-
-		if err := run.waitForUpdate(r.Context()); err != nil {
-			return
-		}
-	}
-}
-
-func (a *App) handleDebateStreamStop(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w, http.MethodPost)
-		return
-	}
-
-	body := http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	defer body.Close()
-
-	req, err := decodeStreamStopRequest(body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	run, ok := a.loadRun(req.RunID)
-	if !ok {
-		writeError(w, http.StatusNotFound, "run not found")
-		return
-	}
-
-	run.stop()
-	writeJSON(w, http.StatusOK, streamStopResponse{
-		RunID:  req.RunID,
-		Status: "stopping",
-	})
-}
-
-func (a *App) executeDebateRun(ctx context.Context, runID string, run *debateRun, problem string, personas []persona.Persona) {
-	resp, err := a.runAndSaveDebate(ctx, problem, personas, run.appendTurn)
-	run.finish(resp, err)
-	time.AfterFunc(runRetention, func() {
-		a.deleteRun(runID)
-	})
-}
-
-func (a *App) nextRunID() string {
-	seq := atomic.AddUint64(&a.runSeq, 1)
-	return fmt.Sprintf("run-%s-%06d", a.now().UTC().Format("20060102-150405.000000000"), seq)
-}
-
-func (a *App) storeRun(run *debateRun) {
-	a.runsMu.Lock()
-	defer a.runsMu.Unlock()
-	a.runs[run.id] = run
-}
-
-func (a *App) loadRun(runID string) (*debateRun, bool) {
-	a.runsMu.RLock()
-	defer a.runsMu.RUnlock()
-	run, ok := a.runs[runID]
-	return run, ok
-}
-
-func (a *App) deleteRun(runID string) {
-	a.runsMu.Lock()
-	defer a.runsMu.Unlock()
-	delete(a.runs, runID)
+	cfg := req.applyRunnerTuning(a.runnerCfg)
+	return &cfg, nil
 }

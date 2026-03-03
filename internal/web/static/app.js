@@ -9,6 +9,18 @@
     const progressWrapEl = document.getElementById("progressWrap");
     const debateWindowEl = document.getElementById("debateWindow");
     const turnMetaEl = document.getElementById("turnMeta");
+    const audienceModeEl = document.getElementById("audienceMode");
+    const maxTurnsEl = document.getElementById("maxTurns");
+    const consensusThresholdEl = document.getElementById("consensusThreshold");
+    const maxNoProgressJudgesEl = document.getElementById("maxNoProgressJudges");
+    const noProgressEpsilonEl = document.getElementById("noProgressEpsilon");
+    const unlimitedHardMaxTurnsEl = document.getElementById("unlimitedHardMaxTurns");
+    const directHandoffJudgeEveryEl = document.getElementById("directHandoffJudgeEvery");
+    const llmHistoryTurnWindowEl = document.getElementById("llmHistoryTurnWindow");
+    const maxDurationSecondsEl = document.getElementById("maxDurationSeconds");
+    const maxTotalTokensEl = document.getElementById("maxTotalTokens");
+    const runTimeoutSecondsEl = document.getElementById("runTimeoutSeconds");
+    const advancedResetBtn = document.getElementById("advancedResetBtn");
 
     const predefinedGroups = [
       { label: "아이디어", path: "./exmaples/personas.ideas.json" },
@@ -380,6 +392,7 @@
         hasDirectivePrefix(normalized, "new_point") ||
         hasDirectivePrefix(normalized, "new-point") ||
         hasDirectivePrefix(normalized, "issue_update") ||
+        hasDirectivePrefix(normalized, "persuasion_update") ||
         hasDirectivePrefix(normalized, "meta_delta") ||
         hasDirectivePrefix(normalized, "self_check") ||
         hasDirectivePrefix(normalized, "option_a") ||
@@ -425,6 +438,129 @@
       return value;
     }
 
+    function parseOptionalIntInput(el, fieldName, minValue) {
+      const raw = String((el && el.value) || "").trim();
+      if (!raw) {
+        return undefined;
+      }
+      if (!/^-?\d+$/.test(raw)) {
+        throw new Error(fieldName + " 값은 정수여야 합니다.");
+      }
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed)) {
+        throw new Error(fieldName + " 값이 너무 큽니다.");
+      }
+      if (typeof minValue === "number" && parsed < minValue) {
+        throw new Error(fieldName + " 값은 " + String(minValue) + " 이상이어야 합니다.");
+      }
+      return parsed;
+    }
+
+    function parseOptionalFloatInput(el, fieldName, minValue, maxValue, exclusiveMin) {
+      const raw = String((el && el.value) || "").trim();
+      if (!raw) {
+        return undefined;
+      }
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(fieldName + " 값은 숫자여야 합니다.");
+      }
+      if (exclusiveMin === true) {
+        if (parsed <= minValue) {
+          throw new Error(fieldName + " 값은 " + String(minValue) + "보다 커야 합니다.");
+        }
+      } else if (typeof minValue === "number" && parsed < minValue) {
+        throw new Error(fieldName + " 값은 " + String(minValue) + " 이상이어야 합니다.");
+      }
+      if (typeof maxValue === "number" && parsed > maxValue) {
+        throw new Error(fieldName + " 값은 " + String(maxValue) + " 이하여야 합니다.");
+      }
+      return parsed;
+    }
+
+    function collectRuntimeOptions() {
+      const options = {};
+      const audienceMode = String((audienceModeEl && audienceModeEl.value) || "").trim();
+      if (audienceMode) {
+        options.audience_mode = audienceMode;
+      }
+
+      const maxTurns = parseOptionalIntInput(maxTurnsEl, "Max Turns", 0);
+      if (typeof maxTurns === "number") {
+        options.max_turns = maxTurns;
+      }
+
+      const consensusThreshold = parseOptionalFloatInput(consensusThresholdEl, "Consensus Threshold", 0, 1, false);
+      if (typeof consensusThreshold === "number") {
+        options.consensus_threshold = consensusThreshold;
+      }
+
+      const maxNoProgressJudges = parseOptionalIntInput(maxNoProgressJudgesEl, "Max No Progress Judges", 1);
+      if (typeof maxNoProgressJudges === "number") {
+        options.max_no_progress_judges = maxNoProgressJudges;
+      }
+
+      const noProgressEpsilon = parseOptionalFloatInput(noProgressEpsilonEl, "No Progress Epsilon", 0, undefined, true);
+      if (typeof noProgressEpsilon === "number") {
+        options.no_progress_epsilon = noProgressEpsilon;
+      }
+
+      const unlimitedHardMaxTurns = parseOptionalIntInput(unlimitedHardMaxTurnsEl, "Unlimited Hard Max Turns", 1);
+      if (typeof unlimitedHardMaxTurns === "number") {
+        options.unlimited_hard_max_turns = unlimitedHardMaxTurns;
+      }
+
+      const directHandoffJudgeEvery = parseOptionalIntInput(directHandoffJudgeEveryEl, "Direct Handoff Judge Every", 1);
+      if (typeof directHandoffJudgeEvery === "number") {
+        options.direct_handoff_judge_every = directHandoffJudgeEvery;
+      }
+
+      const llmHistoryTurnWindow = parseOptionalIntInput(llmHistoryTurnWindowEl, "LLM History Turn Window", 1);
+      if (typeof llmHistoryTurnWindow === "number") {
+        options.llm_history_turn_window = llmHistoryTurnWindow;
+      }
+
+      const maxDurationSeconds = parseOptionalIntInput(maxDurationSecondsEl, "Max Duration (sec)", 1);
+      if (typeof maxDurationSeconds === "number") {
+        options.max_duration_seconds = maxDurationSeconds;
+      }
+
+      const maxTotalTokens = parseOptionalIntInput(maxTotalTokensEl, "Max Total Tokens", 1);
+      if (typeof maxTotalTokens === "number") {
+        options.max_total_tokens = maxTotalTokens;
+      }
+
+      const runTimeoutSeconds = parseOptionalIntInput(runTimeoutSecondsEl, "Run Timeout (sec)", 1);
+      if (typeof runTimeoutSeconds === "number") {
+        options.run_timeout_seconds = runTimeoutSeconds;
+      }
+
+      return options;
+    }
+
+    function resetAdvancedOptions() {
+      if (audienceModeEl) {
+        audienceModeEl.value = "";
+      }
+      const inputs = [
+        maxTurnsEl,
+        consensusThresholdEl,
+        maxNoProgressJudgesEl,
+        noProgressEpsilonEl,
+        unlimitedHardMaxTurnsEl,
+        directHandoffJudgeEveryEl,
+        llmHistoryTurnWindowEl,
+        maxDurationSecondsEl,
+        maxTotalTokensEl,
+        runTimeoutSecondsEl
+      ];
+      inputs.forEach((el) => {
+        if (el) {
+          el.value = "";
+        }
+      });
+    }
+
     async function fetchPersonas(path) {
       const url = path ? "/api/personas?path=" + encodeURIComponent(path) : "/api/personas";
       const res = await fetch(url);
@@ -438,6 +574,8 @@
       if (selectedPersonaPath) {
         requestBody.persona_path = selectedPersonaPath;
       }
+      const runtimeOptions = collectRuntimeOptions();
+      Object.assign(requestBody, runtimeOptions);
 
       const res = await fetch("/api/debate/stream/start", {
         method: "POST",
@@ -840,6 +978,11 @@
 
     runBtn.addEventListener("click", runDebate);
     stopBtn.addEventListener("click", stopDebate);
+    if (advancedResetBtn) {
+      advancedResetBtn.addEventListener("click", () => {
+        resetAdvancedOptions();
+      });
+    }
     personaGroupEl.addEventListener("change", async () => {
       try {
         errorText.textContent = "";

@@ -265,6 +265,7 @@ func stripMachineControlLines(content string) string {
 		upper := strings.ToUpper(candidate)
 		switch {
 		case strings.HasPrefix(upper, "ISSUE_UPDATE:"),
+			strings.HasPrefix(upper, "PERSUASION_UPDATE:"),
 			strings.HasPrefix(upper, "SELF_CHECK:"),
 			strings.HasPrefix(upper, "META_DELTA:"),
 			strings.HasPrefix(upper, "HANDOFF_ASK:"),
@@ -300,6 +301,7 @@ func stripMachineControlLinesPreserveModeratorCore(content string) string {
 		upper := strings.ToUpper(candidate)
 		switch {
 		case strings.HasPrefix(upper, "ISSUE_UPDATE:"),
+			strings.HasPrefix(upper, "PERSUASION_UPDATE:"),
 			strings.HasPrefix(upper, "SELF_CHECK:"),
 			strings.HasPrefix(upper, "META_DELTA:"),
 			strings.HasPrefix(upper, "HANDOFF_ASK:"),

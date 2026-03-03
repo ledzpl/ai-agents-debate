@@ -440,6 +440,7 @@ func isHiddenDirectiveLine(line string) bool {
 		hasDirectivePrefix(normalized, "new_point"),
 		hasDirectivePrefix(normalized, "new-point"),
 		hasDirectivePrefix(normalized, "issue_update"),
+		hasDirectivePrefix(normalized, "persuasion_update"),
 		hasDirectivePrefix(normalized, "meta_delta"),
 		hasDirectivePrefix(normalized, "self_check"),
 		hasDirectivePrefix(normalized, "option_a"),

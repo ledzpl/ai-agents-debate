@@ -47,7 +47,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	runner := orchestrator.New(client, orchestrator.Config{
+	orchCfg := orchestratorConfigFromSettings(settings)
+	runner := orchestrator.New(client, orchCfg)
+
+	app := web.NewApp(web.Config{
+		PersonaPath:    opts.personaPath,
+		BaseDir:        ".",
+		OutputDir:      config.DefaultOutputDir,
+		Runner:         runner,
+		RunnerDefaults: orchCfg,
+		Loader:         persona.LoadFromFile,
+		Now:            time.Now,
+		RunTimeout:     settings.RunTimeout,
+		TurnBuffer:     settings.StreamTurnBuffer,
+	})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.Start(ctx, opts.addr); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "runtime error:", err)
+		os.Exit(1)
+	}
+}
+
+func orchestratorConfigFromSettings(settings config.Settings) orchestrator.Config {
+	return orchestrator.Config{
 		MaxTurns:                settings.MaxTurns,
 		ConsensusThreshold:      settings.ConsensusThreshold,
 		MaxDuration:             settings.MaxDuration,
@@ -57,24 +81,6 @@ func main() {
 		DirectHandoffJudgeEvery: settings.DirectJudgeEvery,
 		LLMHistoryTurnWindow:    settings.LLMHistoryWindow,
 		AudienceMode:            settings.AudienceMode,
-	})
-
-	app := web.NewApp(web.Config{
-		PersonaPath: opts.personaPath,
-		BaseDir:     ".",
-		OutputDir:   config.DefaultOutputDir,
-		Runner:      runner,
-		Loader:      persona.LoadFromFile,
-		Now:         time.Now,
-		RunTimeout:  settings.RunTimeout,
-		TurnBuffer:  settings.StreamTurnBuffer,
-	})
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	if err := app.Start(ctx, opts.addr); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "runtime error:", err)
-		os.Exit(1)
 	}
 }
 

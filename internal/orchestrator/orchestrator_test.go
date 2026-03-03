@@ -758,7 +758,7 @@ func TestRunDirectHandoffCanStopByCloseSignals(t *testing.T) {
 		openingSpeakerID: "a",
 		turnBySpeakerID: map[string]string{
 			"a": "정리 제안\nNEXT: b\nCLOSE: yes\nNEW_POINT: no",
-			"b": "동의합니다\nNEXT: c\nCLOSE: yes\nNEW_POINT: no",
+			"b": "동의합니다\nPERSUASION_UPDATE: changed=yes; adopted=a의 정리 제안; rationale=핵심 리스크 반영; remaining_gap=none\nNEXT: c\nCLOSE: yes\nNEW_POINT: no",
 			"c": "마무리하죠\nNEXT: a\nCLOSE: yes\nNEW_POINT: no",
 		},
 	}
