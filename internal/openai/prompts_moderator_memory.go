@@ -75,7 +75,7 @@ func buildModeratorMemorySnapshot(turns []orchestrator.Turn, previousTurn orches
 		b.WriteString("- anchor turns before latest:\n")
 		writtenAnchors := 0
 		for _, t := range anchors {
-			summary := summarizeTurnContent(t.Content, budget.claimSummaryRunes)
+			summary := summarizeTurnWithType(t, budget.claimSummaryRunes)
 			if summary == "" {
 				continue
 			}
@@ -169,7 +169,7 @@ func collectClaimsBySpeaker(turns []orchestrator.Turn, limit int, summaryRunes i
 		if _, exists := seenSpeaker[key]; exists {
 			continue
 		}
-		summary := summarizeTurnContent(t.Content, summaryRunes)
+		summary := summarizeTurnWithType(t, summaryRunes)
 		if summary == "" {
 			continue
 		}
@@ -236,7 +236,19 @@ func normalizeSpeakerKey(t orchestrator.Turn) string {
 
 func summarizeTurnContent(content string, limit int) string {
 	clean := stripMachineControlLines(content)
-	compact := strings.Join(strings.Fields(strings.TrimSpace(clean)), " ")
+	return summarizeSanitizedContent(clean, limit)
+}
+
+func summarizeTurnWithType(turn orchestrator.Turn, limit int) string {
+	if turn.Type == orchestrator.TurnTypeModerator {
+		clean := stripMachineControlLinesPreserveModeratorCore(turn.Content)
+		return summarizeSanitizedContent(clean, limit)
+	}
+	return summarizeTurnContent(turn.Content, limit)
+}
+
+func summarizeSanitizedContent(content string, limit int) string {
+	compact := strings.Join(strings.Fields(strings.TrimSpace(content)), " ")
 	return truncateRunes(compact, limit)
 }
 
@@ -273,6 +285,54 @@ func stripMachineControlLines(content string) string {
 		filtered = append(filtered, line)
 	}
 	return strings.Join(filtered, "\n")
+}
+
+func stripMachineControlLinesPreserveModeratorCore(content string) string {
+	text := strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		candidate := normalizeDirectiveLineCandidate(trimmed)
+		upper := strings.ToUpper(candidate)
+		switch {
+		case strings.HasPrefix(upper, "ISSUE_UPDATE:"),
+			strings.HasPrefix(upper, "SELF_CHECK:"),
+			strings.HasPrefix(upper, "META_DELTA:"),
+			strings.HasPrefix(upper, "HANDOFF_ASK:"),
+			strings.HasPrefix(upper, "NEXT:"),
+			strings.HasPrefix(upper, "CLOSE:"),
+			strings.HasPrefix(upper, "NEW_POINT:"),
+			strings.HasPrefix(upper, "NEW_POINT="):
+			continue
+		case strings.HasPrefix(upper, "SYNTHESIS:"),
+			strings.HasPrefix(upper, "TENSION:"),
+			strings.HasPrefix(upper, "ASK:"),
+			strings.HasPrefix(upper, "DECISION_CHECK:"),
+			strings.HasPrefix(upper, "OPTION_A:"),
+			strings.HasPrefix(upper, "OPTION_B:"),
+			strings.HasPrefix(upper, "SCORECARD:"),
+			strings.HasPrefix(upper, "SCORECARD_REASON:"):
+			payload := extractDirectiveLinePayload(candidate)
+			if payload != "" {
+				filtered = append(filtered, payload)
+			}
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func extractDirectiveLinePayload(candidate string) string {
+	idx := strings.Index(candidate, ":")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(candidate[idx+1:])
 }
 
 func normalizeDirectiveLineCandidate(line string) string {

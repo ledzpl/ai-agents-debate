@@ -213,6 +213,9 @@ func TestBuildOpeningSpeakerSelectorPrompts(t *testing.T) {
 	if !strings.Contains(systemPrompt, "exactly one JSON object") {
 		t.Fatalf("expected strict json output rule, prompt=%q", systemPrompt)
 	}
+	if !strings.Contains(systemPrompt, "Ignore candidates whose id is empty") {
+		t.Fatalf("expected empty-id candidate handling guidance, prompt=%q", systemPrompt)
+	}
 
 	userPrompt := buildOpeningSpeakerSelectorUserPrompt(orchestrator.SelectOpeningSpeakerInput{
 		Problem: "결제 장애를 줄이려면 무엇부터 해야 하나요?",
@@ -229,6 +232,26 @@ func TestBuildOpeningSpeakerSelectorPrompts(t *testing.T) {
 	}
 	if !strings.Contains(userPrompt, "incident response") {
 		t.Fatalf("expected role context, prompt=%q", userPrompt)
+	}
+}
+
+func TestBuildOpeningSpeakerSelectorUserPromptSkipsEmptyIDCandidates(t *testing.T) {
+	userPrompt := buildOpeningSpeakerSelectorUserPrompt(orchestrator.SelectOpeningSpeakerInput{
+		Problem: "오프닝 화자 선택",
+		Personas: []persona.Persona{
+			{Name: "Unnamed", Role: "generalist"},
+			{ID: "risk", Name: "Risk", Role: "risk"},
+		},
+	})
+
+	if strings.Contains(userPrompt, "- id: \n") {
+		t.Fatalf("did not expect empty-id candidate line, prompt=%q", userPrompt)
+	}
+	if !strings.Contains(userPrompt, "Ignored candidates with empty id: 1") {
+		t.Fatalf("expected skipped-empty-id summary, prompt=%q", userPrompt)
+	}
+	if !strings.Contains(userPrompt, "Allowed persona_id values: risk") {
+		t.Fatalf("expected allowed-id list to include only non-empty ids, prompt=%q", userPrompt)
 	}
 }
 
@@ -337,6 +360,68 @@ func TestBuildModeratorUserPromptIncludesMemoryAnchorsAndTension(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "tension candidate:") {
 		t.Fatalf("expected tension candidate in memory snapshot, prompt=%q", prompt)
+	}
+}
+
+func TestFindLatestModeratorAskPreservesStructuredModeratorLines(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerName: orchestrator.ModeratorSpeakerName,
+			SpeakerID:   orchestrator.ModeratorSpeakerID,
+			Type:        orchestrator.TurnTypeModerator,
+			Content: strings.Join([]string{
+				"SYNTHESIS: 속도와 안정성의 균형이 필요합니다.",
+				"TENSION: 성장 속도와 리스크 허용치가 충돌합니다.",
+				"ASK: 어떤 가드레일을 우선 적용할까요?",
+				"DECISION_CHECK: choose Option A or B; metric_threshold=p95<300ms; decide_by=2026-03-15",
+			}, "\n"),
+		},
+	}
+
+	ask := findLatestModeratorAsk(turns, 220)
+	if ask == "" {
+		t.Fatalf("expected structured moderator content to remain in summary")
+	}
+	if !strings.Contains(ask, "속도와 안정성의 균형") {
+		t.Fatalf("expected moderator synthesis payload to be preserved, ask=%q", ask)
+	}
+	if strings.Contains(strings.ToUpper(ask), "SYNTHESIS:") {
+		t.Fatalf("did not expect moderator control label to remain in summary, ask=%q", ask)
+	}
+}
+
+func TestBuildModeratorLoopStatusSkipsEmptyPersonaResponse(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerName: orchestrator.ModeratorSpeakerName,
+			SpeakerID:   orchestrator.ModeratorSpeakerID,
+			Type:        orchestrator.TurnTypeModerator,
+			Content:     "SYNTHESIS: 리스크를 정리합시다.\nASK: 우선순위는?",
+		},
+		{
+			Index:       2,
+			SpeakerName: "A",
+			SpeakerID:   "a",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "HANDOFF_ASK: 다음은?\nNEXT: b\nCLOSE: no\nNEW_POINT: no",
+		},
+		{
+			Index:       3,
+			SpeakerName: "B",
+			SpeakerID:   "b",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "실제 답변입니다. 우선 로그 모니터링부터 강화해야 합니다.",
+		},
+	}
+
+	status := buildModeratorLoopStatus(turns, 220)
+	if strings.Contains(status, "A: ") {
+		t.Fatalf("did not expect empty summarized response from speaker A, status=%q", status)
+	}
+	if !strings.Contains(status, "B: 실제 답변입니다.") {
+		t.Fatalf("expected first non-empty persona response to be selected, status=%q", status)
 	}
 }
 
@@ -979,12 +1064,58 @@ func TestExtractDirectiveValueRequiresDirectiveBoundary(t *testing.T) {
 	}
 }
 
+func TestSummarizeCloseReadinessParsesMarkdownPrefixedIssueUpdate(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "- ISSUE_UPDATE: launch-window | owner=pm | decide_by=2026-03-10 | blocker=none",
+		},
+	}
+
+	summary := summarizeCloseReadiness(turns)
+	if summary.unownedIssues != 0 {
+		t.Fatalf("expected markdown-prefixed issue update to parse owner, got %d", summary.unownedIssues)
+	}
+	if summary.unresolvedBlockers != 0 {
+		t.Fatalf("expected markdown-prefixed issue update to parse blocker, got %d", summary.unresolvedBlockers)
+	}
+	if summary.decideBySignals != 1 {
+		t.Fatalf("expected markdown-prefixed issue update to parse decide_by, got %d", summary.decideBySignals)
+	}
+}
+
 func TestExtractDirectiveValueStopsBeforeFollowingDirectiveToken(t *testing.T) {
 	if got := extractDirectiveValue("DECISION_CHECK: choose Option A; decide_by=soon blocker=none", "decide_by="); got != "soon" {
 		t.Fatalf("expected decide_by value to stop before following directive token, got %q", got)
 	}
 	if got := extractDirectiveValue("DECISION_CHECK: decide_by=2026-03-10 17:00 blocker=none", "decide_by="); got != "2026-03-10 17:00" {
 		t.Fatalf("expected datetime with space to be preserved, got %q", got)
+	}
+}
+
+func TestTrailingNoNewPointStreakParsesMarkdownPrefixedDirective(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "1. NEW_POINT: no",
+		},
+		{
+			Index:       2,
+			SpeakerID:   "p2",
+			SpeakerName: "Risk",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "> NEW_POINT=no",
+		},
+	}
+
+	if got := trailingNoNewPointStreak(turns); got != 2 {
+		t.Fatalf("expected markdown-prefixed NEW_POINT directives to be parsed, got %d", got)
 	}
 }
 

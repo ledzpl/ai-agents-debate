@@ -136,6 +136,7 @@ Pick the single most relevant persona to frame the discussion. Prioritize Domain
 ### OUTPUT FORMAT (STRICT)
 - Return exactly one JSON object: {"persona_id":"matched_id"}
 - persona_id must be one of the provided candidate ids.
+- Ignore candidates whose id is empty.
 - No markdown, no prose, no code blocks.`)
 }
 
@@ -145,11 +146,14 @@ func buildOpeningSpeakerSelectorUserPrompt(input orchestrator.SelectOpeningSpeak
 	b.WriteString(input.Problem)
 	b.WriteString("\n\nCandidates:\n")
 	allowedIDs := make([]string, 0, len(input.Personas))
+	skippedEmptyID := 0
 	for _, p := range input.Personas {
 		id := strings.TrimSpace(p.ID)
-		if id != "" {
-			allowedIDs = append(allowedIDs, id)
+		if id == "" {
+			skippedEmptyID++
+			continue
 		}
+		allowedIDs = append(allowedIDs, id)
 		b.WriteString(fmt.Sprintf("- id: %s\n", id))
 		if name := strings.TrimSpace(p.Name); name != "" {
 			b.WriteString("  name: " + name + "\n")
@@ -165,8 +169,14 @@ func buildOpeningSpeakerSelectorUserPrompt(input orchestrator.SelectOpeningSpeak
 			b.WriteString("  master_name: " + master + "\n")
 		}
 	}
+	if skippedEmptyID > 0 {
+		b.WriteString(fmt.Sprintf("\nIgnored candidates with empty id: %d\n", skippedEmptyID))
+	}
 	if len(allowedIDs) > 0 {
 		b.WriteString("\nAllowed persona_id values: " + strings.Join(allowedIDs, ", ") + "\n")
+	} else {
+		b.WriteString("\nAllowed persona_id values: none (all candidate ids were empty)\n")
+		b.WriteString("If no selectable id exists, return {\"persona_id\":\"\"}.\n")
 	}
 	b.WriteString("\nSelect the best opening speaker persona_id now.")
 	return b.String()
@@ -243,7 +253,7 @@ func buildTurnUserPrompt(input orchestrator.GenerateTurnInput) string {
 	} else {
 		written := 0
 		for _, t := range trimTurns(input.Turns, budget.turnRecentLogLimit) {
-			summary := summarizeTurnContent(t.Content, budget.turnLogSummaryRunes)
+			summary := summarizeTurnWithType(t, budget.turnLogSummaryRunes)
 			if summary == "" {
 				continue
 			}
@@ -344,7 +354,7 @@ func buildJudgeUserPrompt(input orchestrator.JudgeConsensusInput) string {
 	b.WriteString("Debate log tail:\n")
 	writtenLog := 0
 	for _, t := range judgeTurns {
-		summary := summarizeTurnContent(t.Content, budget.judgeLogSummaryRunes)
+		summary := summarizeTurnWithType(t, budget.judgeLogSummaryRunes)
 		if summary == "" {
 			continue
 		}
@@ -419,7 +429,7 @@ func buildModeratorUserPrompt(input orchestrator.GenerateModeratorInput) string 
 	recentTurns := trimTurns(input.Turns, budget.moderatorRecentLogLimit)
 	writtenRecent := 0
 	for _, t := range recentTurns {
-		summary := summarizeTurnContent(t.Content, budget.moderatorLogSummaryRunes)
+		summary := summarizeTurnWithType(t, budget.moderatorLogSummaryRunes)
 		if summary == "" {
 			continue
 		}
@@ -510,7 +520,7 @@ func buildFinalModeratorUserPrompt(input orchestrator.GenerateFinalModeratorInpu
 	} else {
 		writtenTail := 0
 		for _, t := range logTail {
-			summary := summarizeTurnContent(t.Content, budget.judgeLogSummaryRunes)
+			summary := summarizeTurnWithType(t, budget.judgeLogSummaryRunes)
 			if summary == "" {
 				continue
 			}
@@ -604,7 +614,7 @@ func findLatestModeratorAsk(turns []orchestrator.Turn, summaryRunes int) string 
 		if t.Type != orchestrator.TurnTypeModerator {
 			continue
 		}
-		content := summarizeTurnContent(t.Content, summaryRunes)
+		content := summarizeTurnWithType(t, summaryRunes)
 		if content == "" {
 			continue
 		}
@@ -629,7 +639,7 @@ func buildModeratorLoopStatus(turns []orchestrator.Turn, summaryRunes int) strin
 		return "- previous moderator ask: none\n- first response after that ask: n/a\n"
 	}
 
-	ask := summarizeTurnContent(turns[lastModeratorIdx].Content, summaryRunes)
+	ask := summarizeTurnWithType(turns[lastModeratorIdx], summaryRunes)
 	if ask == "" {
 		ask = "(empty)"
 	}
@@ -643,7 +653,11 @@ func buildModeratorLoopStatus(turns []orchestrator.Turn, summaryRunes int) strin
 		if speaker == "" {
 			speaker = strings.TrimSpace(turns[i].SpeakerID)
 		}
-		response = fmt.Sprintf("%s: %s", speaker, summarizeTurnContent(turns[i].Content, summaryRunes))
+		summary := summarizeTurnWithType(turns[i], summaryRunes)
+		if summary == "" {
+			continue
+		}
+		response = fmt.Sprintf("%s: %s", speaker, summary)
 		break
 	}
 	if response == "" {
@@ -777,21 +791,25 @@ func extractDecisionStateSnapshot(turns []orchestrator.Turn) decisionStateSnapsh
 			if trimmed == "" {
 				continue
 			}
+			normalized := normalizeDirectiveLineCandidate(trimmed)
+			if normalized == "" {
+				continue
+			}
 
-			upper := strings.ToUpper(trimmed)
+			upper := strings.ToUpper(normalized)
 			if strings.HasPrefix(upper, "ISSUE_UPDATE:") {
-				payload := strings.TrimSpace(trimmed[len("ISSUE_UPDATE:"):])
+				payload := strings.TrimSpace(normalized[len("ISSUE_UPDATE:"):])
 				key := applyIssueUpdate(payload, states, &anonymousIssueID)
 				issueOrder[key] = updateSeq
 				updateSeq++
 				continue
 			}
 
-			if val := extractDirectiveValue(trimmed, "decide_by="); !isPlaceholderValue(val) {
+			if val := extractDirectiveValue(normalized, "decide_by="); !isPlaceholderValue(val) {
 				hasStandaloneDecideBy = true
 				continue
 			}
-			if val := extractDirectiveValue(trimmed, "deadline="); !isPlaceholderValue(val) {
+			if val := extractDirectiveValue(normalized, "deadline="); !isPlaceholderValue(val) {
 				hasStandaloneDecideBy = true
 			}
 		}
@@ -1128,7 +1146,10 @@ func parseNewPointDirective(content string) (bool, bool) {
 	text := strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
+		line := normalizeDirectiveLineCandidate(strings.TrimSpace(lines[i]))
+		if line == "" {
+			continue
+		}
 		switch {
 		case strings.HasPrefix(strings.ToUpper(line), "NEW_POINT:"):
 			raw := strings.TrimSpace(line[len("NEW_POINT:"):])
