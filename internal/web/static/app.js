@@ -9,6 +9,11 @@
     const progressWrapEl = document.getElementById("progressWrap");
     const debateWindowEl = document.getElementById("debateWindow");
     const turnMetaEl = document.getElementById("turnMeta");
+    const phaseMetaEl = document.getElementById("phaseMeta");
+    const elapsedMetaEl = document.getElementById("elapsedMeta");
+    const speakerMetaEl = document.getElementById("speakerMeta");
+    const timelineFiltersEl = document.getElementById("timelineFilters");
+    const compactToggleEl = document.getElementById("compactToggle");
     const audienceModeEl = document.getElementById("audienceMode");
     const maxTurnsEl = document.getElementById("maxTurns");
     const consensusThresholdEl = document.getElementById("consensusThreshold");
@@ -34,12 +39,24 @@
 
     let personaGroups = [];
     let selectedPersonaPath = "";
-	    let currentRunID = "";
-	    let currentStream = null;
-	    let turnCount = 0;
-	    let stopRequested = false;
-	    let latestPersonaLoadSeq = 0;
-	    const maxRenderedTurnCards = 320;
+    let currentRunID = "";
+    let currentStream = null;
+    let turnCount = 0;
+    let personaTurnCount = 0;
+    let nonPersonaTurnCount = 0;
+    let debatePersonaCount = 0;
+    let activeSpeakerLabel = "-";
+    let runStartedAtMs = 0;
+    let elapsedTimerID = null;
+    let stopRequested = false;
+    let latestPersonaLoadSeq = 0;
+    const maxRenderedTurnCards = 320;
+    const turnVisibility = {
+      persona: true,
+      moderator: true,
+      system: true,
+      summary: true
+    };
 
     function closeCurrentStream() {
       if (!currentStream) return;
@@ -58,6 +75,121 @@
         text += " · " + state;
       }
       turnMetaEl.textContent = text;
+    }
+
+    function formatElapsed(ms) {
+      const safe = Math.max(0, Number(ms) || 0);
+      const totalSec = Math.floor(safe / 1000);
+      const hours = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
+      const mm = String(mins).padStart(2, "0");
+      const ss = String(secs).padStart(2, "0");
+      if (hours > 0) {
+        return String(hours).padStart(2, "0") + ":" + mm + ":" + ss;
+      }
+      return mm + ":" + ss;
+    }
+
+    function derivePhaseLabel() {
+      if (debatePersonaCount <= 0) {
+        return "-";
+      }
+      const effectiveTurns = personaTurnCount + Math.floor((nonPersonaTurnCount + 1) / 2);
+      return effectiveTurns < debatePersonaCount * 2 ? "Exploration" : "Convergence";
+    }
+
+    function updateRunMeta() {
+      if (phaseMetaEl) {
+        phaseMetaEl.textContent = "Phase: " + derivePhaseLabel();
+      }
+      if (elapsedMetaEl) {
+        const elapsed = runStartedAtMs > 0 ? Date.now() - runStartedAtMs : 0;
+        elapsedMetaEl.textContent = "Elapsed: " + formatElapsed(elapsed);
+      }
+      if (speakerMetaEl) {
+        speakerMetaEl.textContent = "Speaker: " + (activeSpeakerLabel || "-");
+      }
+    }
+
+    function stopElapsedTimer() {
+      if (elapsedTimerID !== null) {
+        window.clearInterval(elapsedTimerID);
+        elapsedTimerID = null;
+      }
+    }
+
+    function startElapsedTimer() {
+      stopElapsedTimer();
+      if (runStartedAtMs <= 0) {
+        runStartedAtMs = Date.now();
+      }
+      updateRunMeta();
+      elapsedTimerID = window.setInterval(updateRunMeta, 1000);
+    }
+
+    function resetRunMeta() {
+      turnCount = 0;
+      personaTurnCount = 0;
+      nonPersonaTurnCount = 0;
+      debatePersonaCount = 0;
+      activeSpeakerLabel = "-";
+      runStartedAtMs = 0;
+      stopElapsedTimer();
+      updateRunMeta();
+    }
+
+    function normalizeTurnKind(type) {
+      const value = String(type || "").toLowerCase().trim();
+      if (value === "turn-persona" || value === "persona") {
+        return "persona";
+      }
+      if (value === "turn-moderator" || value === "moderator") {
+        return "moderator";
+      }
+      if (value === "turn-summary" || value === "summary") {
+        return "summary";
+      }
+      return "system";
+    }
+
+    function isTurnKindVisible(kind) {
+      const normalized = normalizeTurnKind(kind);
+      return turnVisibility[normalized] !== false;
+    }
+
+    function applyCardVisibility(card) {
+      if (!card) {
+        return;
+      }
+      const kind = normalizeTurnKind(card.dataset.turnKind || card.className);
+      const visible = isTurnKindVisible(kind);
+      card.hidden = !visible;
+      card.style.display = visible ? "" : "none";
+      card.setAttribute("aria-hidden", visible ? "false" : "true");
+    }
+
+    function refreshTimelineVisibility() {
+      const cards = debateWindowEl.querySelectorAll(".turn-card");
+      cards.forEach((card) => applyCardVisibility(card));
+    }
+
+    function syncFilterChips() {
+      if (!timelineFiltersEl) {
+        return;
+      }
+      const chips = timelineFiltersEl.querySelectorAll(".filter-chip[data-kind]");
+      chips.forEach((chip) => {
+        const kind = normalizeTurnKind(chip.dataset.kind || "");
+        const active = isTurnKindVisible(kind);
+        chip.classList.toggle("is-active", active);
+        chip.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+
+    function setCompactView(enabled) {
+      const active = Boolean(enabled);
+      debateWindowEl.classList.toggle("is-compact", active);
     }
 
     function normalizeKey(value) {
@@ -140,7 +272,8 @@
       }
     }
 
-    function sanitizeTurnContent(content) {
+    function sanitizeTurnContent(content, turnKind) {
+      const isModeratorTurn = normalizeTurnKind(turnKind) === "moderator";
       const lines = String(content || "").split("\n");
       const visible = [];
       for (const line of lines) {
@@ -152,14 +285,13 @@
         if (isListMarkerOnly(trimmed)) {
           continue;
         }
-        const readablePayload = extractReadableDirectivePayload(trimmed);
-        if (readablePayload !== null) {
-          if (readablePayload) {
-            visible.push(readablePayload);
-          }
-          continue;
-        }
         if (isHiddenDirectiveLine(trimmed)) {
+          if (isModeratorTurn) {
+            const readable = extractReadableModeratorDirective(trimmed);
+            if (readable) {
+              visible.push(readable);
+            }
+          }
           continue;
         }
         visible.push(trimmed);
@@ -400,6 +532,13 @@
         hasDirectivePrefix(normalized, "new-point") ||
         hasDirectivePrefix(normalized, "issue_update") ||
         hasDirectivePrefix(normalized, "persuasion_update") ||
+        hasDirectivePrefix(normalized, "synthesis") ||
+        hasDirectivePrefix(normalized, "tension") ||
+        hasDirectivePrefix(normalized, "ask") ||
+        hasDirectivePrefix(normalized, "decision_check") ||
+        hasDirectivePrefix(normalized, "decision-check") ||
+        hasDirectivePrefix(normalized, "persuasion_check") ||
+        hasDirectivePrefix(normalized, "persuasion-check") ||
         hasDirectivePrefix(normalized, "meta_delta") ||
         hasDirectivePrefix(normalized, "self_check") ||
         hasDirectivePrefix(normalized, "option_a") ||
@@ -416,40 +555,42 @@
       return rest.startsWith(":") || rest.startsWith("=") || rest.startsWith("：");
     }
 
-    function extractReadableDirectivePayload(line) {
-      const candidate = normalizeDirectiveCandidate(line);
-      if (!candidate) {
-        return null;
+    function extractDirectivePayloadText(candidate, key) {
+      const lower = candidate.toLowerCase();
+      if (!hasDirectivePrefix(lower, key)) {
+        return "";
       }
-      const normalized = candidate.toLowerCase();
-      const keys = [
-        "synthesis",
-        "tension",
-        "ask",
-        "decision_check",
-        "decision-check",
-        "persuasion_check",
-        "persuasion-check"
-      ];
-      for (const key of keys) {
-        if (!hasDirectivePrefix(normalized, key)) {
-          continue;
-        }
-        return extractDirectivePayload(candidate, key);
-      }
-      return null;
-    }
-
-    function extractDirectivePayload(candidate, key) {
       const rest = candidate.slice(key.length).trimStart();
       if (!rest) {
         return "";
       }
-      if (rest.startsWith(":") || rest.startsWith("=")) {
+      if (rest.startsWith(":") || rest.startsWith("=") || rest.startsWith("：")) {
         return rest.slice(1).trim();
       }
-      if (rest.startsWith("：")) {
-        return rest.slice(1).trim();
+      return "";
+    }
+
+    function extractReadableModeratorDirective(line) {
+      const candidate = normalizeDirectiveCandidate(line);
+      if (!candidate) {
+        return "";
+      }
+
+      const synthesis = extractDirectivePayloadText(candidate, "synthesis");
+      if (synthesis) {
+        return "요약: " + synthesis;
+      }
+      const tension = extractDirectivePayloadText(candidate, "tension");
+      if (tension) {
+        return "쟁점: " + tension;
+      }
+      const ask = extractDirectivePayloadText(candidate, "ask");
+      if (ask) {
+        return "질문: " + ask;
+      }
+      const decisionCheck = extractDirectivePayloadText(candidate, "decision_check") || extractDirectivePayloadText(candidate, "decision-check");
+      if (decisionCheck) {
+        return "결정 기준: " + decisionCheck;
       }
       return "";
     }
@@ -728,6 +869,7 @@
     function createTurnCard(type, badge, name, content) {
       const card = document.createElement("article");
       card.className = "turn-card " + type;
+      card.dataset.turnKind = normalizeTurnKind(type);
 
       // Determine colors based on type
       let hue = 0;
@@ -801,9 +943,12 @@
       return card;
     }
 
-    function appendTurnCard(type, badge, name, content) {
-      const card = createTurnCard(type, badge, name, content);
+    function appendCardElement(card) {
+      if (!card) {
+        return;
+      }
       card.style.setProperty("--turn-order", String(debateWindowEl.childElementCount + 1));
+      applyCardVisibility(card);
       debateWindowEl.appendChild(card);
       while (debateWindowEl.childElementCount > maxRenderedTurnCards) {
         debateWindowEl.removeChild(debateWindowEl.firstElementChild);
@@ -811,29 +956,173 @@
       debateWindowEl.scrollTop = debateWindowEl.scrollHeight;
     }
 
-	    function clearDebateWindow() {
-	      debateWindowEl.innerHTML = "";
-	      turnCount = 0;
-	      setTurnMeta(0, "대기");
-	      clearActivePersona();
-	    }
+    function appendTurnCard(type, badge, name, content) {
+      const card = createTurnCard(type, badge, name, content);
+      appendCardElement(card);
+    }
 
-	    function finalizeRunState(statusValue, turnState, errorMessage, stopNotice) {
-	      if (typeof errorMessage === "string") {
-	        errorText.textContent = errorMessage;
-	      }
-	      clearActivePersona();
-	      statusText.textContent = statusValue;
-	      setTurnMeta(turnCount, turnState);
-	      setDebateRunning(false);
-	      hideProgress();
-	      closeCurrentStream();
-	      currentRunID = "";
-	      stopRequested = false;
-	      if (stopNotice) {
-	        appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
-	      }
-	    }
+    function summaryCopyText(result, payload) {
+      const consensus = (result && result.consensus) || {};
+      const openRisks = Array.isArray(consensus.open_risks) ? consensus.open_risks.filter(Boolean) : [];
+      const lines = [
+        "[핵심 결론]",
+        "status: " + String(result && result.status ? result.status : "-"),
+        "consensus_score: " + (Number.isFinite(Number(consensus.score)) ? Number(consensus.score).toFixed(2) : "-"),
+        "summary: " + String(consensus.summary || "-"),
+        "",
+        "[오픈 리스크]"
+      ];
+      if (openRisks.length > 0) {
+        openRisks.forEach((risk) => lines.push("- " + String(risk)));
+      } else {
+        lines.push("- 없음");
+      }
+      lines.push(
+        "",
+        "[다음 액션]",
+        "owner: " + String(consensus.next_action_owner || "-"),
+        "trigger/deadline: " + String(consensus.next_action_trigger_or_deadline || "-"),
+        "success_metric: " + String(consensus.next_action_success_metric || "-"),
+        "required_next_action: " + String(consensus.required_next_action || "-"),
+        "",
+        "saved_json: " + String((payload && payload.saved_json_path) || "-"),
+        "saved_markdown: " + String((payload && payload.saved_markdown_path) || "-")
+      );
+      return lines.join("\n");
+    }
+
+    function copyTextToClipboard(text) {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        return navigator.clipboard.writeText(text);
+      }
+      return new Promise((resolve, reject) => {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "readonly");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          const ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+          if (ok) {
+            resolve();
+          } else {
+            reject(new Error("copy failed"));
+          }
+        } catch (err) {
+          document.body.removeChild(ta);
+          reject(err);
+        }
+      });
+    }
+
+    function createSummaryCard(result, payload) {
+      const consensus = (result && result.consensus) || {};
+      const openRisks = Array.isArray(consensus.open_risks) ? consensus.open_risks.filter(Boolean) : [];
+      const scoreValue = Number(consensus.score);
+      const scoreText = Number.isFinite(scoreValue) ? scoreValue.toFixed(2) : "-";
+      const summaryText = String(consensus.summary || "-");
+      const statusTextValue = String((result && result.status) || "-");
+      const nextOwner = String(consensus.next_action_owner || "-");
+      const nextTrigger = String(consensus.next_action_trigger_or_deadline || "-");
+      const nextMetric = String(consensus.next_action_success_metric || "-");
+      const requiredAction = String(consensus.required_next_action || "-");
+      const savedJSON = String((payload && payload.saved_json_path) || "-");
+      const savedMarkdown = String((payload && payload.saved_markdown_path) || "-");
+
+      const card = createTurnCard("turn-summary", "SUMMARY", "토론 결과", "");
+      const contentEl = card.querySelector(".turn-content");
+      const risksHTML = openRisks.length > 0
+        ? "<ul class=\"summary-list\">" + openRisks.map((risk) => "<li>" + renderInlineMarkdown(String(risk)) + "</li>").join("") + "</ul>"
+        : "<p class=\"summary-empty\">현재 보고된 오픈 리스크가 없습니다.</p>";
+
+      contentEl.innerHTML = [
+        "<div class=\"summary-grid\">",
+        "  <section class=\"summary-section\">",
+        "    <h4>핵심 결론</h4>",
+        "    <p class=\"summary-main\">" + renderInlineMarkdown(summaryText) + "</p>",
+        "    <ul class=\"summary-kv\">",
+        "      <li><span>Status</span><strong>" + escapeHTML(statusTextValue) + "</strong></li>",
+        "      <li><span>Consensus Score</span><strong>" + escapeHTML(scoreText) + "</strong></li>",
+        "    </ul>",
+        "  </section>",
+        "  <section class=\"summary-section\">",
+        "    <h4>오픈 리스크</h4>",
+        risksHTML,
+        "  </section>",
+        "  <section class=\"summary-section\">",
+        "    <h4>다음 액션</h4>",
+        "    <ul class=\"summary-kv\">",
+        "      <li><span>Owner</span><strong>" + escapeHTML(nextOwner) + "</strong></li>",
+        "      <li><span>Trigger/Deadline</span><strong>" + escapeHTML(nextTrigger) + "</strong></li>",
+        "      <li><span>Success Metric</span><strong>" + escapeHTML(nextMetric) + "</strong></li>",
+        "    </ul>",
+        "    <p class=\"summary-main\">" + renderInlineMarkdown(requiredAction) + "</p>",
+        "  </section>",
+        "</div>",
+        "<div class=\"summary-files\">",
+        "  <span>saved_json: <code>" + escapeHTML(savedJSON) + "</code></span>",
+        "  <span>saved_markdown: <code>" + escapeHTML(savedMarkdown) + "</code></span>",
+        "</div>"
+      ].join("");
+
+      const head = card.querySelector(".turn-head");
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "summary-copy-btn";
+      copyBtn.textContent = "결과 복사";
+      copyBtn.addEventListener("click", async () => {
+        const original = copyBtn.textContent;
+        try {
+          await copyTextToClipboard(summaryCopyText(result, payload));
+          copyBtn.textContent = "복사됨";
+        } catch (_) {
+          copyBtn.textContent = "복사 실패";
+        }
+        window.setTimeout(() => {
+          copyBtn.textContent = original;
+        }, 1300);
+      });
+      const actionWrap = document.createElement("div");
+      actionWrap.className = "turn-head-actions";
+      const badgeEl = head.querySelector(".turn-badge");
+      if (badgeEl) {
+        actionWrap.appendChild(badgeEl);
+      }
+      actionWrap.appendChild(copyBtn);
+      head.appendChild(actionWrap);
+      return card;
+    }
+
+    function clearDebateWindow() {
+      debateWindowEl.innerHTML = "";
+      resetRunMeta();
+      setTurnMeta(0, "대기");
+      clearActivePersona();
+    }
+
+    function finalizeRunState(statusValue, turnState, errorMessage, stopNotice) {
+      if (typeof errorMessage === "string") {
+        errorText.textContent = errorMessage;
+      }
+      clearActivePersona();
+      statusText.textContent = statusValue;
+      setTurnMeta(turnCount, turnState);
+      setDebateRunning(false);
+      hideProgress();
+      stopElapsedTimer();
+      updateRunMeta();
+      closeCurrentStream();
+      currentRunID = "";
+      stopRequested = false;
+      if (stopNotice) {
+        activeSpeakerLabel = "토론 중지";
+        updateRunMeta();
+        appendTurnCard("turn-system", "STOP", "토론 중지", "사용자 요청으로 토론이 중지되었습니다.");
+      }
+    }
 
     function applyPersonaPayload(payload, path) {
       selectedPersonaPath = payload.path || path || "";
@@ -864,10 +1153,10 @@
 	    }
 
 
-	    async function runDebate() {
-	      errorText.textContent = "";
-	      statusText.textContent = "토론 실행 중...";
-	      setDebateRunning(true);
+    async function runDebate() {
+      errorText.textContent = "";
+      statusText.textContent = "토론 실행 중...";
+      setDebateRunning(true);
       stopRequested = false;
       showProgress("토론을 시작하는 중...");
       closeCurrentStream();
@@ -881,23 +1170,28 @@
         const problem = problemEl.value.trim();
         if (!problem) throw new Error("토론 주제를 입력해 주세요.");
 
-	        const startPayload = await createDebateRun(problem);
-	        currentRunID = String(startPayload.run_id);
+        const startPayload = await createDebateRun(problem);
+        currentRunID = String(startPayload.run_id);
 
-	        const stream = new EventSource("/api/debate/stream?run_id=" + encodeURIComponent(currentRunID));
-	        currentStream = stream;
-	        const streamRunID = currentRunID;
-	        let finished = false;
-	        function isStaleStream() {
-	          return currentStream !== stream || currentRunID !== streamRunID;
-	        }
+        const stream = new EventSource("/api/debate/stream?run_id=" + encodeURIComponent(currentRunID));
+        currentStream = stream;
+        const streamRunID = currentRunID;
+        let finished = false;
+        function isStaleStream() {
+          return currentStream !== stream || currentRunID !== streamRunID;
+        }
 
-	        stream.addEventListener("start", function (ev) {
-	          if (finished || isStaleStream()) {
-	            return;
-	          }
+        stream.addEventListener("start", function (ev) {
+          if (finished || isStaleStream()) {
+            return;
+          }
           const payload = parseJSON(ev.data) || {};
           clearDebateWindow();
+          debatePersonaCount = Number.isFinite(Number(payload.persona_count)) ? Number(payload.persona_count) : 0;
+          runStartedAtMs = Date.now();
+          startElapsedTimer();
+          activeSpeakerLabel = "토론 시작";
+          updateRunMeta();
           setTurnMeta(0, "진행 중");
           showProgress("토론 진행 중...");
           appendTurnCard(
@@ -908,29 +1202,46 @@
           );
         });
 
-	        stream.addEventListener("turn", function (ev) {
-	          if (finished || isStaleStream()) {
-	            return;
-	          }
+        stream.addEventListener("turn", function (ev) {
+          if (finished || isStaleStream()) {
+            return;
+          }
           const turn = parseJSON(ev.data);
           if (!turn) {
             return;
           }
           const turnType = String(turn.type || "").toLowerCase();
           const isModerator = turnType === "moderator";
-          if (isModerator) {
+          const isSystem = turnType === "system";
+          if (turnType !== "persona") {
             clearActivePersona();
           } else {
             highlightSpeakerPersona(turn.speaker_id, turn.speaker_name);
           }
           turnCount += 1;
+          if (turnType === "persona") {
+            personaTurnCount += 1;
+          } else {
+            nonPersonaTurnCount += 1;
+          }
+          activeSpeakerLabel = turn.speaker_name || turn.speaker_id || (isModerator ? "Moderator" : "Unknown");
+          updateRunMeta();
           setTurnMeta(turnCount, "진행 중");
           showProgress("토론 진행 중... (" + String(turnCount) + "턴)");
+          let cardType = "turn-persona";
+          let badgePrefix = "TURN ";
+          if (isModerator) {
+            cardType = "turn-moderator";
+            badgePrefix = "MOD ";
+          } else if (isSystem) {
+            cardType = "turn-system";
+            badgePrefix = "SYS ";
+          }
           appendTurnCard(
-            isModerator ? "turn-moderator" : "turn-persona",
-            (isModerator ? "MOD " : "TURN ") + String(turn.index || "?"),
+            cardType,
+            badgePrefix + String(turn.index || "?"),
             turn.speaker_name || turn.speaker_id || "Unknown",
-            sanitizeTurnContent(turn.content || "")
+            sanitizeTurnContent(turn.content || "", turnType)
           );
         });
 
@@ -941,68 +1252,51 @@
           finished = true;
           const payload = parseJSON(ev.data) || {};
           const result = payload.result || {};
-          const consensus = result.consensus || {};
-          const openRisks = Array.isArray(consensus.open_risks) ? consensus.open_risks.filter(Boolean) : [];
-          const riskLine = openRisks.length > 0 ? openRisks.join(", ") : "-";
-          const nextActionOwner = consensus.next_action_owner || "-";
-          const nextActionTrigger = consensus.next_action_trigger_or_deadline || "-";
-          const nextActionSuccessMetric = consensus.next_action_success_metric || "-";
-          appendTurnCard(
-            "turn-summary",
-            "SUMMARY",
-            "토론 결과",
-            "status: " + (result.status || "-") + "\nconsensus_score: " + Number(consensus.score || 0).toFixed(2) +
-              "\nsummary: " + (consensus.summary || "-") +
-              "\nopen_risks: " + riskLine +
-              "\nnext_action_owner: " + nextActionOwner +
-              "\nnext_action_trigger_or_deadline: " + nextActionTrigger +
-              "\nnext_action_success_metric: " + nextActionSuccessMetric +
-              "\nrequired_next_action: " + (consensus.required_next_action || "-") +
-              "\nsaved_json: " + (payload.saved_json_path || "-") +
-              "\nsaved_markdown: " + (payload.saved_markdown_path || "-")
-          );
+          activeSpeakerLabel = "토론 결과";
+          updateRunMeta();
+          appendCardElement(createSummaryCard(result, payload));
           finalizeRunState("완료", "완료", "", false);
         });
 
-	        stream.addEventListener("debate_error", function (ev) {
-	          if (finished || isStaleStream()) {
-	            return;
-	          }
-	          finished = true;
-	          const payload = parseJSON(ev.data) || {};
-	          finalizeRunState("실패", "실패", payload.error || "토론 실행 실패", false);
-	        });
+        stream.addEventListener("debate_error", function (ev) {
+          if (finished || isStaleStream()) {
+            return;
+          }
+          finished = true;
+          const payload = parseJSON(ev.data) || {};
+          finalizeRunState("실패", "실패", payload.error || "토론 실행 실패", false);
+        });
 
-	        stream.addEventListener("stopped", function () {
-	          if (finished || isStaleStream()) {
-	            return;
-	          }
-	          finished = true;
-	          finalizeRunState("중지됨", "중지", "", true);
-	        });
+        stream.addEventListener("stopped", function () {
+          if (finished || isStaleStream()) {
+            return;
+          }
+          finished = true;
+          finalizeRunState("중지됨", "중지", "", true);
+        });
 
-	        stream.onerror = function () {
-	          if (finished || isStaleStream()) {
-	            return;
-	          }
-	          if (stopRequested) {
-	            finished = true;
-	            finalizeRunState("중지됨", "중지", "", true);
-	            return;
-	          }
-	          if (stream.readyState === EventSource.CONNECTING) {
-	            statusText.textContent = "재연결 중...";
-	            showProgress("스트림 재연결 중...");
-	            return;
-	          }
-	          finished = true;
-	          const errMsg = errorText.textContent || "스트림 연결이 종료되었습니다.";
-	          finalizeRunState("실패", "실패", errMsg, false);
-	        };
-	      } catch (err) {
-	        finalizeRunState("실패", "실패", String(err.message || err), false);
-	      }
-	    }
+        stream.onerror = function () {
+          if (finished || isStaleStream()) {
+            return;
+          }
+          if (stopRequested) {
+            finished = true;
+            finalizeRunState("중지됨", "중지", "", true);
+            return;
+          }
+          if (stream.readyState === EventSource.CONNECTING) {
+            statusText.textContent = "재연결 중...";
+            showProgress("스트림 재연결 중...");
+            return;
+          }
+          finished = true;
+          const errMsg = errorText.textContent || "스트림 연결이 종료되었습니다.";
+          finalizeRunState("실패", "실패", errMsg, false);
+        };
+      } catch (err) {
+        finalizeRunState("실패", "실패", String(err.message || err), false);
+      }
+    }
 
     async function stopDebate() {
       if (!currentRunID) {
@@ -1019,6 +1313,53 @@
         errorText.textContent = String(err.message || err);
         setDebateRunning(true);
       }
+    }
+
+    function toggleTimelineFilter(kind) {
+      const normalizedKind = normalizeTurnKind(kind);
+      if (!Object.prototype.hasOwnProperty.call(turnVisibility, normalizedKind)) {
+        return;
+      }
+      const currentlyVisible = isTurnKindVisible(normalizedKind);
+      if (currentlyVisible) {
+        const visibleCount = Object.values(turnVisibility).filter(Boolean).length;
+        if (visibleCount <= 1) {
+          return;
+        }
+      }
+      turnVisibility[normalizedKind] = !currentlyVisible;
+      syncFilterChips();
+      refreshTimelineVisibility();
+    }
+
+    function bindTimelineFilters() {
+      if (!timelineFiltersEl) {
+        return;
+      }
+      const chips = timelineFiltersEl.querySelectorAll(".filter-chip[data-kind]");
+      chips.forEach((chip) => {
+        const toggle = (event) => {
+          if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          toggleTimelineFilter(chip.dataset.kind || "");
+        };
+        chip.addEventListener("click", toggle);
+        chip.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            toggle(event);
+          }
+        });
+      });
+    }
+
+    bindTimelineFilters();
+
+    if (compactToggleEl) {
+      compactToggleEl.addEventListener("change", () => {
+        setCompactView(compactToggleEl.checked);
+      });
     }
 
     runBtn.addEventListener("click", runDebate);
@@ -1042,6 +1383,10 @@
       personaMetaEl.textContent = "";
       errorText.textContent = String(err.message || err);
     });
+    syncFilterChips();
+    refreshTimelineVisibility();
+    setCompactView(Boolean(compactToggleEl && compactToggleEl.checked));
     setTurnMeta(0, "대기");
+    updateRunMeta();
     setDebateRunning(false);
     hideProgress();

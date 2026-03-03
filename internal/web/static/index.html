@@ -29,7 +29,27 @@
         <section class="panel discussion">
           <div class="discussion-head">
             <h2>토론 타임라인</h2>
-            <div class="turn-meta" id="turnMeta">0 턴</div>
+            <div class="discussion-meta">
+              <div class="turn-meta" id="turnMeta">0 턴</div>
+              <div class="status-strip" id="statusStrip" aria-live="polite">
+                <span class="status-chip" id="phaseMeta">Phase: -</span>
+                <span class="status-chip" id="elapsedMeta">Elapsed: 00:00</span>
+                <span class="status-chip" id="speakerMeta">Speaker: -</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-toolbar">
+            <div class="timeline-filters" id="timelineFilters" role="group" aria-label="타임라인 필터">
+              <button type="button" class="filter-chip is-active" data-kind="persona">Persona</button>
+              <button type="button" class="filter-chip is-active" data-kind="moderator">Moderator</button>
+              <button type="button" class="filter-chip is-active" data-kind="system">System</button>
+              <button type="button" class="filter-chip is-active" data-kind="summary">Summary</button>
+            </div>
+            <label class="compact-toggle" for="compactToggle">
+              <input type="checkbox" id="compactToggle" />
+              <span>Compact view</span>
+            </label>
           </div>
 
           <div class="debate-window" id="debateWindow" aria-live="polite">

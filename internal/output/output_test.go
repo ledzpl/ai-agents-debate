@@ -273,11 +273,6 @@ func TestSanitizeTurnContentForDisplayRemovesDirectiveLines(t *testing.T) {
 		"일반 본문",
 		"중간 판단",
 		"추정 근거",
-		"지금은 속도보다 안전이 우선",
-		"출시 일정과 안정성 기준 충돌",
-		"다음 턴에서 확정할 임계값은?",
-		"choose Option A or B; metric_threshold=응답속도 상위 구간(p95)<300ms; decide_by=3일",
-		"adopted_from=[7]; remaining_gap=none",
 		"결론 라인",
 	}, "\n")
 	if got != want {

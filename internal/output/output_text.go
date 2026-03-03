@@ -95,56 +95,12 @@ func sanitizeTurnContentForDisplay(content string) string {
 		if isListMarkerOnly(trimmed) {
 			continue
 		}
-		if payload, ok := extractReadableDirectivePayload(trimmed); ok {
-			if payload == "" {
-				continue
-			}
-			visible = append(visible, rewriteTechnicalTerms(payload))
-			continue
-		}
 		if isHiddenDirectiveLine(trimmed) {
 			continue
 		}
 		visible = append(visible, rewriteTechnicalTerms(trimmed))
 	}
 	return strings.TrimSpace(strings.Join(visible, "\n"))
-}
-
-func extractReadableDirectivePayload(line string) (string, bool) {
-	candidate := normalizeDirectiveCandidate(line)
-	if candidate == "" {
-		return "", false
-	}
-	normalized := strings.ToLower(candidate)
-	for _, key := range []string{
-		"synthesis",
-		"tension",
-		"ask",
-		"decision_check",
-		"decision-check",
-		"persuasion_check",
-		"persuasion-check",
-	} {
-		if !hasDirectivePrefix(normalized, key) {
-			continue
-		}
-		return extractDirectivePayload(candidate, key), true
-	}
-	return "", false
-}
-
-func extractDirectivePayload(candidate string, key string) string {
-	rest := strings.TrimSpace(candidate[len(key):])
-	switch {
-	case rest == "":
-		return ""
-	case strings.HasPrefix(rest, ":"), strings.HasPrefix(rest, "="):
-		return strings.TrimSpace(rest[1:])
-	case strings.HasPrefix(rest, "："):
-		return strings.TrimSpace(strings.TrimPrefix(rest, "："))
-	default:
-		return ""
-	}
 }
 
 func rewriteTechnicalTerms(text string) string {
@@ -188,6 +144,13 @@ func isHiddenDirectiveLine(line string) bool {
 		hasDirectivePrefix(normalized, "new-point"),
 		hasDirectivePrefix(normalized, "issue_update"),
 		hasDirectivePrefix(normalized, "persuasion_update"),
+		hasDirectivePrefix(normalized, "synthesis"),
+		hasDirectivePrefix(normalized, "tension"),
+		hasDirectivePrefix(normalized, "ask"),
+		hasDirectivePrefix(normalized, "decision_check"),
+		hasDirectivePrefix(normalized, "decision-check"),
+		hasDirectivePrefix(normalized, "persuasion_check"),
+		hasDirectivePrefix(normalized, "persuasion-check"),
 		hasDirectivePrefix(normalized, "meta_delta"),
 		hasDirectivePrefix(normalized, "self_check"),
 		hasDirectivePrefix(normalized, "option_a"),
