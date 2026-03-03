@@ -73,8 +73,17 @@ func buildModeratorMemorySnapshot(turns []orchestrator.Turn, previousTurn orches
 		b.WriteString("- anchor turns before latest: none\n")
 	} else {
 		b.WriteString("- anchor turns before latest:\n")
+		writtenAnchors := 0
 		for _, t := range anchors {
-			b.WriteString(fmt.Sprintf("  - [%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summarizeTurnContent(t.Content, budget.claimSummaryRunes)))
+			summary := summarizeTurnContent(t.Content, budget.claimSummaryRunes)
+			if summary == "" {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("  - [%d][%s][%s] %s\n", t.Index, t.SpeakerName, t.Type, summary))
+			writtenAnchors++
+		}
+		if writtenAnchors == 0 {
+			b.WriteString("  - none after control-line filtering\n")
 		}
 	}
 
@@ -160,10 +169,14 @@ func collectClaimsBySpeaker(turns []orchestrator.Turn, limit int, summaryRunes i
 		if _, exists := seenSpeaker[key]; exists {
 			continue
 		}
+		summary := summarizeTurnContent(t.Content, summaryRunes)
+		if summary == "" {
+			continue
+		}
 		seenSpeaker[key] = struct{}{}
 		claims = append(claims, speakerClaim{
 			speaker: speaker,
-			claim:   summarizeTurnContent(t.Content, summaryRunes),
+			claim:   summary,
 		})
 	}
 	return claims
@@ -222,8 +235,90 @@ func normalizeSpeakerKey(t orchestrator.Turn) string {
 }
 
 func summarizeTurnContent(content string, limit int) string {
-	compact := strings.Join(strings.Fields(strings.TrimSpace(content)), " ")
+	clean := stripMachineControlLines(content)
+	compact := strings.Join(strings.Fields(strings.TrimSpace(clean)), " ")
 	return truncateRunes(compact, limit)
+}
+
+func stripMachineControlLines(content string) string {
+	text := strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		candidate := normalizeDirectiveLineCandidate(trimmed)
+		upper := strings.ToUpper(candidate)
+		switch {
+		case strings.HasPrefix(upper, "ISSUE_UPDATE:"),
+			strings.HasPrefix(upper, "SELF_CHECK:"),
+			strings.HasPrefix(upper, "META_DELTA:"),
+			strings.HasPrefix(upper, "HANDOFF_ASK:"),
+			strings.HasPrefix(upper, "NEXT:"),
+			strings.HasPrefix(upper, "CLOSE:"),
+			strings.HasPrefix(upper, "NEW_POINT:"),
+			strings.HasPrefix(upper, "NEW_POINT="),
+			strings.HasPrefix(upper, "SYNTHESIS:"),
+			strings.HasPrefix(upper, "TENSION:"),
+			strings.HasPrefix(upper, "ASK:"),
+			strings.HasPrefix(upper, "DECISION_CHECK:"),
+			strings.HasPrefix(upper, "OPTION_A:"),
+			strings.HasPrefix(upper, "OPTION_B:"),
+			strings.HasPrefix(upper, "SCORECARD:"),
+			strings.HasPrefix(upper, "SCORECARD_REASON:"):
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func normalizeDirectiveLineCandidate(line string) string {
+	value := strings.TrimSpace(line)
+	for value != "" {
+		prev := value
+		lower := strings.ToLower(value)
+
+		if strings.HasPrefix(lower, "- [ ] ") || strings.HasPrefix(lower, "- [x] ") {
+			value = strings.TrimSpace(value[6:])
+		}
+		if strings.HasPrefix(value, ">") {
+			value = strings.TrimSpace(value[1:])
+		}
+		if strings.HasPrefix(value, "- ") || strings.HasPrefix(value, "* ") || strings.HasPrefix(value, "+ ") {
+			value = strings.TrimSpace(value[2:])
+		}
+		if idx := strings.Index(value, ". "); idx > 0 && isLikelyOrderedListPrefix(value[:idx]) {
+			value = strings.TrimSpace(value[idx+2:])
+		}
+		if value == prev {
+			break
+		}
+	}
+	return value
+}
+
+func isDigits(text string) bool {
+	if text == "" {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isLikelyOrderedListPrefix(prefix string) bool {
+	if !isDigits(prefix) {
+		return false
+	}
+	// Limit to short ordered-list markers (e.g. "1.", "12.", "123.").
+	// Avoid stripping date-like strings such as "2026. 3월".
+	return len(prefix) <= 3
 }
 
 func truncateRunes(text string, limit int) string {

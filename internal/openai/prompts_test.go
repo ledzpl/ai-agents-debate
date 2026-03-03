@@ -176,7 +176,7 @@ func TestBuildTurnSystemPromptMentionsMasterKnowledgeSources(t *testing.T) {
 	if !strings.Contains(prompt, "unresolved blockers <=1") || !strings.Contains(prompt, "unowned issues = 0") || !strings.Contains(prompt, "decide_by signals >=1") {
 		t.Fatalf("expected quantitative close criteria guidance, prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "without bracket labels") {
+	if !strings.Contains(prompt, "avoid non-index bracket labels") {
 		t.Fatalf("expected non-tagged evidence/inference guidance, prompt=%q", prompt)
 	}
 	if strings.Contains(prompt, "Tag each core claim as [evidence], [inference], or [assumption].") {
@@ -976,6 +976,217 @@ func TestExtractDirectiveValueRequiresDirectiveBoundary(t *testing.T) {
 	}
 	if got := extractDirectiveValue("context not_decide_by=2026-03-10; decide_by=2026-03-11", "decide_by="); got != "2026-03-11" {
 		t.Fatalf("expected extraction from explicit directive token, got %q", got)
+	}
+}
+
+func TestExtractDirectiveValueStopsBeforeFollowingDirectiveToken(t *testing.T) {
+	if got := extractDirectiveValue("DECISION_CHECK: choose Option A; decide_by=soon blocker=none", "decide_by="); got != "soon" {
+		t.Fatalf("expected decide_by value to stop before following directive token, got %q", got)
+	}
+	if got := extractDirectiveValue("DECISION_CHECK: decide_by=2026-03-10 17:00 blocker=none", "decide_by="); got != "2026-03-10 17:00" {
+		t.Fatalf("expected datetime with space to be preserved, got %q", got)
+	}
+}
+
+func TestExtractDirectiveValuePreservesURLTokenInValue(t *testing.T) {
+	line := "DECISION_CHECK: decide_by=2026-03-10 https://runbook.example.com/ops blocker=none"
+	if got := extractDirectiveValue(line, "decide_by="); got != "2026-03-10 https://runbook.example.com/ops" {
+		t.Fatalf("expected URL token to remain part of decide_by value, got %q", got)
+	}
+}
+
+func TestExtractDirectiveValuePreservesCommaInNaturalLanguageDate(t *testing.T) {
+	line := "DECISION_CHECK: decide_by=March 10, 2026 blocker=none"
+	if got := extractDirectiveValue(line, "decide_by="); got != "March 10, 2026" {
+		t.Fatalf("expected comma-containing date value to remain intact, got %q", got)
+	}
+}
+
+func TestExtractDirectiveValueStopsAtCommaDelimitedDirectiveToken(t *testing.T) {
+	line := "DECISION_CHECK: decide_by=soon, blocker=none"
+	if got := extractDirectiveValue(line, "decide_by="); got != "soon" {
+		t.Fatalf("expected decide_by to stop at comma-delimited directive token, got %q", got)
+	}
+}
+
+func TestExtractDirectiveValueStopsAtCommaDelimitedDirectiveTokenWithoutSpace(t *testing.T) {
+	line := "DECISION_CHECK: decide_by=soon,blocker=none"
+	if got := extractDirectiveValue(line, "decide_by="); got != "soon" {
+		t.Fatalf("expected decide_by to stop at compact comma-delimited directive token, got %q", got)
+	}
+}
+
+func TestIsPlaceholderValueHandlesWrappedVariants(t *testing.T) {
+	cases := []string{
+		"(soon)",
+		"(unknown)",
+		"<trigger>)",
+		"{deadline}",
+	}
+	for _, tc := range cases {
+		if !isPlaceholderValue(tc) {
+			t.Fatalf("expected wrapped/template placeholder %q to be treated as placeholder", tc)
+		}
+	}
+	if isPlaceholderValue("2026-03-10 17:00") {
+		t.Fatalf("did not expect concrete datetime to be placeholder")
+	}
+}
+
+func TestSummarizeTurnContentStripsMarkdownPrefixedDirectiveLines(t *testing.T) {
+	content := strings.Join([]string{
+		"> ISSUE_UPDATE: launch-window | owner=pm | decide_by=2026-03-10 | blocker=none",
+		"- DECISION_CHECK: choose Option A or B; metric_threshold>=2%; decide_by=2026-03-12",
+		"1. SCORECARD: coherence=80; executability=70; risk_coverage=75",
+		"실제 사용자 영향: 초기 전환율은 소폭 개선되지만 리스크 모니터링이 필요합니다.",
+	}, "\n")
+
+	summary := summarizeTurnContent(content, 200)
+	if strings.Contains(strings.ToUpper(summary), "ISSUE_UPDATE") ||
+		strings.Contains(strings.ToUpper(summary), "DECISION_CHECK") ||
+		strings.Contains(strings.ToUpper(summary), "SCORECARD") {
+		t.Fatalf("expected directive-prefixed lines to be stripped from summary, got %q", summary)
+	}
+	if !strings.Contains(summary, "실제 사용자 영향") {
+		t.Fatalf("expected non-directive narrative to remain in summary, got %q", summary)
+	}
+}
+
+func TestSummarizeTurnContentControlOnlyReturnsEmpty(t *testing.T) {
+	content := strings.Join([]string{
+		"HANDOFF_ASK: 다음 화자가 검증할 핵심 지표는?",
+		"NEXT: p2",
+		"CLOSE: no",
+		"NEW_POINT: no",
+	}, "\n")
+
+	if got := summarizeTurnContent(content, 120); got != "" {
+		t.Fatalf("expected control-only content to summarize as empty, got %q", got)
+	}
+}
+
+func TestSummarizeTurnContentDoesNotStripYearLikeSentencePrefix(t *testing.T) {
+	content := "2026. 3월까지 실험 완료 후 결과를 공유합니다."
+	got := summarizeTurnContent(content, 120)
+	if !strings.Contains(got, "2026. 3월까지") {
+		t.Fatalf("expected year-like sentence prefix to remain, got %q", got)
+	}
+}
+
+func TestBuildJudgeDecisionStateSnapshotTruncatesIssueRegistryByBudget(t *testing.T) {
+	turns := make([]orchestrator.Turn, 0, judgeSnapshotIssueLimit+3)
+	for i := 1; i <= judgeSnapshotIssueLimit+3; i++ {
+		turns = append(turns, orchestrator.Turn{
+			Index:       i,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     fmt.Sprintf("ISSUE_UPDATE: issue-%02d | owner=pm | decide_by=2026-03-%02d | blocker=none", i, i),
+		})
+	}
+
+	snapshot := buildJudgeDecisionStateSnapshot(turns)
+	if !strings.Contains(snapshot, "more issues omitted for prompt budget") {
+		t.Fatalf("expected truncated snapshot notice, snapshot=%q", snapshot)
+	}
+	if got := strings.Count(snapshot, "owner="); got != judgeSnapshotIssueLimit {
+		t.Fatalf("expected exactly %d issue lines after truncation, got %d", judgeSnapshotIssueLimit, got)
+	}
+}
+
+func TestBuildJudgeDecisionStateSnapshotPrioritizesUnresolvedAndRecentIssues(t *testing.T) {
+	turns := make([]orchestrator.Turn, 0, judgeSnapshotIssueLimit+2)
+	for i := 1; i <= judgeSnapshotIssueLimit+1; i++ {
+		turns = append(turns, orchestrator.Turn{
+			Index:       i,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     fmt.Sprintf("ISSUE_UPDATE: issue-%02d | owner=pm | decide_by=2026-03-%02d | blocker=none", i, i),
+		})
+	}
+	turns = append(turns, orchestrator.Turn{
+		Index:       judgeSnapshotIssueLimit + 2,
+		SpeakerID:   "p2",
+		SpeakerName: "Risk",
+		Type:        orchestrator.TurnTypePersona,
+		Content:     "ISSUE_UPDATE: z-urgent-risk | owner=unassigned | decide_by=tbd | blocker=security review pending",
+	})
+
+	snapshot := buildJudgeDecisionStateSnapshot(turns)
+	if !strings.Contains(snapshot, "z-urgent-risk: owner=unassigned; decide_by=tbd; blocker=security review pending") {
+		t.Fatalf("expected unresolved/recent issue to be prioritized into capped snapshot, snapshot=%q", snapshot)
+	}
+}
+
+func TestBuildModeratorMemorySnapshotShowsAnchorFallbackAfterFiltering(t *testing.T) {
+	turns := []orchestrator.Turn{
+		{
+			Index:       1,
+			SpeakerID:   "p1",
+			SpeakerName: "PM",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "HANDOFF_ASK: 다음 액션?\nNEXT: p2\nCLOSE: no\nNEW_POINT: no",
+		},
+		{
+			Index:       2,
+			SpeakerID:   "p2",
+			SpeakerName: "Risk",
+			Type:        orchestrator.TurnTypePersona,
+			Content:     "ISSUE_UPDATE: risk | owner=risk | decide_by=2026-03-12 | blocker=none",
+		},
+	}
+
+	out := buildModeratorMemorySnapshot(turns, turns[len(turns)-1], defaultModeratorMemoryBudget())
+	if !strings.Contains(out, "anchor turns before latest:") {
+		t.Fatalf("expected anchor section header, output=%q", out)
+	}
+	if !strings.Contains(out, "none after control-line filtering") {
+		t.Fatalf("expected anchor fallback notice after filtering, output=%q", out)
+	}
+}
+
+func TestBuildJudgeUserPromptShowsFilteredNoneWhenDebateTailHasOnlyControlLines(t *testing.T) {
+	prompt := buildJudgeUserPrompt(orchestrator.JudgeConsensusInput{
+		Problem: "릴리즈 의사결정",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+		},
+		Turns: []orchestrator.Turn{
+			{
+				Index:       1,
+				SpeakerID:   "p1",
+				SpeakerName: "PM",
+				Type:        orchestrator.TurnTypePersona,
+				Content:     "HANDOFF_ASK: 다음 액션?\nNEXT: p1\nCLOSE: no\nNEW_POINT: no",
+			},
+		},
+	})
+
+	if !strings.Contains(prompt, "- none after control-line filtering.") {
+		t.Fatalf("expected filtered-none fallback in judge debate tail, prompt=%q", prompt)
+	}
+}
+
+func TestBuildFinalModeratorUserPromptShowsFilteredNoneWhenLogTailHasOnlyControlLines(t *testing.T) {
+	prompt := buildFinalModeratorUserPrompt(orchestrator.GenerateFinalModeratorInput{
+		Problem: "최종 정리",
+		Personas: []persona.Persona{
+			{ID: "p1", Name: "PM", Role: "product"},
+		},
+		Turns: []orchestrator.Turn{
+			{
+				Index:       1,
+				SpeakerID:   "p1",
+				SpeakerName: "PM",
+				Type:        orchestrator.TurnTypePersona,
+				Content:     "HANDOFF_ASK: 다음 액션?\nNEXT: p1\nCLOSE: no\nNEW_POINT: no",
+			},
+		},
+	})
+
+	if !strings.Contains(prompt, "Final debate log tail:\n- none after control-line filtering.") {
+		t.Fatalf("expected filtered-none fallback in final debate log tail, prompt=%q", prompt)
 	}
 }
 

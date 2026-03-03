@@ -148,6 +148,212 @@
       return visible.join("\n").trim();
     }
 
+    function escapeHTML(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function escapeAttr(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function sanitizeMarkdownURL(rawURL) {
+      const value = String(rawURL || "").trim();
+      if (!value) {
+        return "";
+      }
+
+      const lower = value.toLowerCase();
+      if (lower.startsWith("mailto:")) {
+        return value;
+      }
+      if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+        return "";
+      }
+
+      try {
+        const parsed = new URL(value);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          return "";
+        }
+        return parsed.href;
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function renderInlineMarkdown(text) {
+      let value = String(text || "");
+      const tokens = [];
+      const tokenKey = (index) => "\u0000MDTOK" + String(index) + "\u0000";
+      const putToken = (html) => {
+        const idx = tokens.length;
+        tokens.push(html);
+        return tokenKey(idx);
+      };
+
+      value = value.replace(/`([^`\n]+)`/g, function (_, code) {
+        return putToken("<code>" + escapeHTML(code) + "</code>");
+      });
+
+      value = value.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, function (_, label, url) {
+        const safeURL = sanitizeMarkdownURL(url);
+        if (!safeURL) {
+          return putToken(escapeHTML(label) + " (" + escapeHTML(url) + ")");
+        }
+        return putToken(
+          '<a href="' + escapeAttr(safeURL) + '" target="_blank" rel="noopener noreferrer">' +
+            escapeHTML(label) +
+          "</a>"
+        );
+      });
+
+      let html = escapeHTML(value);
+      html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+      html = html.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+      html = html.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+      html = html.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
+      html = html.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+      html = html.replace(/\u0000MDTOK(\d+)\u0000/g, function (_, idx) {
+        const i = Number(idx);
+        if (Number.isNaN(i) || !tokens[i]) {
+          return "";
+        }
+        return tokens[i];
+      });
+      return html;
+    }
+
+    function isMarkdownBlockBoundary(line) {
+      const text = String(line || "");
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return true;
+      }
+      return /^```/.test(trimmed) ||
+        /^\s{0,3}(#{1,6})\s+/.test(text) ||
+        /^\s{0,3}>\s?/.test(text) ||
+        /^\s{0,3}[-*+]\s+/.test(text) ||
+        /^\s{0,3}\d+\.\s+/.test(text) ||
+        /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(text);
+    }
+
+    function markdownToHTML(content) {
+      const source = String(content || "").replace(/\r\n/g, "\n").trim();
+      if (!source) {
+        return "";
+      }
+
+      const lines = source.split("\n");
+      const out = [];
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        if (!trimmed) {
+          i += 1;
+          continue;
+        }
+
+        const fenceMatch = trimmed.match(/^```([A-Za-z0-9_+-]+)?\s*$/);
+        if (fenceMatch) {
+          const lang = (fenceMatch[1] || "").toLowerCase();
+          i += 1;
+          const codeLines = [];
+          while (i < lines.length && !/^```/.test(lines[i].trim())) {
+            codeLines.push(lines[i]);
+            i += 1;
+          }
+          if (i < lines.length) {
+            i += 1;
+          }
+          const classAttr = lang ? ' class="language-' + escapeAttr(lang) + '"' : "";
+          out.push("<pre><code" + classAttr + ">" + escapeHTML(codeLines.join("\n")) + "</code></pre>");
+          continue;
+        }
+
+        const headingMatch = line.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
+        if (headingMatch) {
+          const level = headingMatch[1].length;
+          out.push("<h" + String(level) + ">" + renderInlineMarkdown(headingMatch[2].trim()) + "</h" + String(level) + ">");
+          i += 1;
+          continue;
+        }
+
+        if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+          out.push("<hr />");
+          i += 1;
+          continue;
+        }
+
+        if (/^\s{0,3}>\s?/.test(line)) {
+          const quoteLines = [];
+          while (i < lines.length) {
+            const quoteMatch = lines[i].match(/^\s{0,3}>\s?(.*)$/);
+            if (!quoteMatch) {
+              break;
+            }
+            quoteLines.push(quoteMatch[1]);
+            i += 1;
+          }
+          out.push("<blockquote>" + markdownToHTML(quoteLines.join("\n")) + "</blockquote>");
+          continue;
+        }
+
+        if (/^\s{0,3}[-*+]\s+/.test(line)) {
+          const items = [];
+          while (i < lines.length) {
+            const itemMatch = lines[i].match(/^\s{0,3}[-*+]\s+(.+)$/);
+            if (!itemMatch) {
+              break;
+            }
+            items.push("<li>" + renderInlineMarkdown(itemMatch[1].trim()) + "</li>");
+            i += 1;
+          }
+          out.push("<ul>" + items.join("") + "</ul>");
+          continue;
+        }
+
+        if (/^\s{0,3}\d+\.\s+/.test(line)) {
+          const items = [];
+          while (i < lines.length) {
+            const itemMatch = lines[i].match(/^\s{0,3}\d+\.\s+(.+)$/);
+            if (!itemMatch) {
+              break;
+            }
+            items.push("<li>" + renderInlineMarkdown(itemMatch[1].trim()) + "</li>");
+            i += 1;
+          }
+          out.push("<ol>" + items.join("") + "</ol>");
+          continue;
+        }
+
+        const paragraph = [];
+        while (i < lines.length) {
+          const current = lines[i];
+          if (!String(current || "").trim()) {
+            break;
+          }
+          if (paragraph.length > 0 && isMarkdownBlockBoundary(current)) {
+            break;
+          }
+          paragraph.push(String(current || "").trim());
+          i += 1;
+        }
+        out.push("<p>" + paragraph.map(renderInlineMarkdown).join("<br />") + "</p>");
+      }
+
+      return out.join("");
+    }
+
     function stripEvidenceMeta(line) {
       return String(line || "").replace(
         /\(?\s*(?:evidence_type\s*=\s*)?[^,\)\s]+(?:\s*,\s*|\s+)\s*confidence\s*=\s*[^,\)\s]+\s*\)?[.!?。．…]*/gi,
@@ -403,9 +609,9 @@
       head.appendChild(nameWrap);
       head.appendChild(badgeEl);
 
-      const contentEl = document.createElement("p");
+      const contentEl = document.createElement("div");
       contentEl.className = "turn-content";
-      contentEl.textContent = content;
+      contentEl.innerHTML = markdownToHTML(content);
 
       card.appendChild(head);
       card.appendChild(contentEl);

@@ -447,9 +447,86 @@ select:focus {
   color: var(--ink-950);
   font-size: 14px;
   line-height: 1.65;
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-wrap: anywhere;
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.turn-content > :first-child {
+  margin-top: 0;
+}
+
+.turn-content > :last-child {
+  margin-bottom: 0;
+}
+
+.turn-content p,
+.turn-content ul,
+.turn-content ol,
+.turn-content pre,
+.turn-content blockquote,
+.turn-content h1,
+.turn-content h2,
+.turn-content h3,
+.turn-content h4,
+.turn-content h5,
+.turn-content h6 {
+  margin: 0 0 0.72em;
+}
+
+.turn-content ul,
+.turn-content ol {
+  padding-left: 1.35em;
+}
+
+.turn-content li + li {
+  margin-top: 0.22em;
+}
+
+.turn-content a {
+  color: #1644c4;
+  text-decoration: underline;
+  text-decoration-color: rgba(22, 68, 196, 0.4);
+  text-underline-offset: 0.12em;
+}
+
+.turn-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Noto Sans Mono CJK KR", monospace;
+  font-size: 0.92em;
+  padding: 0.08em 0.34em;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.08);
+  color: #1f2a44;
+}
+
+.turn-content pre {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(26, 45, 89, 0.2);
+  background: rgba(13, 18, 28, 0.04);
+  overflow-x: auto;
+}
+
+.turn-content pre code {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
+}
+
+.turn-content blockquote {
+  margin-left: 0;
+  padding: 0.12em 0 0.12em 0.85em;
+  border-left: 3px solid rgba(22, 68, 196, 0.34);
+  color: #2f456e;
+}
+
+.turn-content hr {
+  border: 0;
+  border-top: 1px solid rgba(26, 45, 89, 0.22);
+  margin: 0.9em 0;
 }
 
 .turn-card:hover .turn-content {
@@ -520,6 +597,21 @@ select:focus {
   color: #f8fbff;
   background: linear-gradient(130deg, var(--cobalt-600), #2b67ef 48%, var(--cobalt-700));
   box-shadow: 0 18px 34px rgba(28, 69, 173, 0.32);
+}
+
+.turn-summary .turn-content a {
+  color: #ffffff;
+  text-decoration-color: rgba(255, 255, 255, 0.5);
+}
+
+.turn-summary .turn-content code {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.turn-summary .turn-content blockquote {
+  border-left-color: rgba(255, 255, 255, 0.55);
+  color: rgba(248, 251, 255, 0.92);
 }
 
 .controls {
